@@ -2,7 +2,7 @@
 
 Desktop client foundation for Windows 11, built around the existing FunPay Vertex engine.
 
-## Install and first run on Windows
+## Quick install on Windows\n\n1. Double-click `InstallDesktop.bat` in the repository root.\n2. When installation finishes, run the original `Start.bat` once and complete Vertex's first-run setup.\n3. Double-click `RunDesktop.bat` to launch FunPay Assistant.\n\nThe scripts use a local Python 3.11 virtual environment under `desktop/.venv`.\n\n## Manual install and first run on Windows
 
 Requires Python 3.11 or newer. Open PowerShell in the repository root:
 
