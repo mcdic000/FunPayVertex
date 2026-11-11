@@ -26,6 +26,13 @@ def _value(value: Any) -> str:
 
 
 def serialize_order(order: Any) -> dict[str, Any]:
+    order_date = getattr(order, "date", None)
+    if isinstance(order_date, datetime):
+        order_date_text = order_date.isoformat(sep=" ", timespec="minutes")
+    elif isinstance(order_date, date):
+        order_date_text = order_date.isoformat()
+    else:
+        order_date_text = ""
     return {
         "id": str(getattr(order, "id", "")),
         "buyer": getattr(order, "buyer_username", None) or "",
@@ -33,8 +40,7 @@ def serialize_order(order: Any) -> dict[str, Any]:
         "price": getattr(order, "price", None),
         "currency": _value(getattr(order, "currency", None)),
         "status": _value(getattr(order, "status", None)),
-        "date": getattr(order, "date", None).isoformat(sep=" ", timespec="minutes")
-                if isinstance(getattr(order, "date", None), (datetime, date)) else "",
+        "date": order_date_text,
         "chat_id": str(getattr(order, "chat_id", "")),
     }
 
@@ -145,9 +151,18 @@ def _handle_command(vertex: Any, command: dict[str, Any]) -> dict[str, Any]:
         message_text = command.get("text", "")
         if not chat_id or not isinstance(message_text, str) or not message_text.strip():
             raise ValueError("Укажи чат и непустое сообщение")
-        chat = account.get_chat_by_id(int(chat_id), make_request=False)
+        numeric_chat_id = int(chat_id)
+        chat = account.get_chat_by_id(numeric_chat_id, make_request=False)
         chat_name = getattr(chat, "name", None) if chat else None
-        sent = account.send_message(int(chat_id), message_text, chat_name=chat_name)
+        interlocutor_id = None
+        if vertex.runner:
+            interlocutor_id = vertex.runner.users_ids.get(numeric_chat_id)
+        if interlocutor_id is None:
+            history = account.get_chat_history(numeric_chat_id, interlocutor_username=chat_name)
+            if history:
+                interlocutor_id = history[-1].interlocutor_id
+        sent = account.send_message(numeric_chat_id, message_text, chat_name=chat_name,
+                                    interlocutor_id=interlocutor_id)
         return {"message": serialize_message(sent), "chat_id": str(chat_id)}
 
     raise ValueError(f"Неизвестная команда: {action}")
