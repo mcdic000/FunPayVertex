@@ -213,6 +213,32 @@ def _save_rule_config(vertex: Any, root: Path, name: str, content: str) -> dict[
                 pass
 
 
+def _ensure_safe_directory(root: Path, *parts: str, create: bool = True) -> Path:
+    """Create a project-local directory while rejecting symlink/junction escapes."""
+    root = Path(root).resolve()
+    current = root
+    for part in parts:
+        if not isinstance(part, str) or not part or Path(part).name != part or part in (".", ".."):
+            raise ValueError("Недопустимый путь локальной папки проекта.")
+        candidate = current / part
+        if candidate.is_symlink():
+            raise ValueError("Символические ссылки в локальных папках проекта не поддерживаются.")
+        if candidate.exists() and not candidate.is_dir():
+            raise ValueError(f"Ожидалась папка: {candidate.name}")
+        if not candidate.exists():
+            if not create:
+                raise ValueError(f"Папка не найдена: {candidate.name}")
+            candidate.mkdir()
+        if candidate.is_symlink():
+            raise ValueError("Символические ссылки в локальных папках проекта не поддерживаются.")
+        parent_resolved = current.resolve()
+        resolved = candidate.resolve()
+        if resolved.parent != parent_resolved:
+            raise ValueError("Путь локальной папки выходит за пределы проекта.")
+        current = candidate
+    return current
+
+
 def _stock_file_path(root: Path, filename: Any, create_dir: bool = True) -> Path:
     if not isinstance(filename, str):
         raise ValueError("Имя файла товаров должно быть текстом")
@@ -232,17 +258,10 @@ def _stock_file_path(root: Path, filename: Any, create_dir: bool = True) -> Path
         raise ValueError("Это имя зарезервировано Windows.")
 
     root = Path(root).resolve()
-    storage_dir = root / "storage"
-    products_dir = storage_dir / "products"
-    if create_dir:
-        products_dir.mkdir(parents=True, exist_ok=True)
-    if storage_dir.is_symlink() or products_dir.is_symlink():
-        raise ValueError("Папки storage и storage/products не должны быть символическими ссылками.")
-    root_resolved = root.resolve()
-    storage_resolved = storage_dir.resolve()
+    products_dir = _ensure_safe_directory(
+        root, "storage", "products", create=create_dir
+    )
     products_resolved = products_dir.resolve()
-    if storage_resolved.parent != root_resolved or products_resolved.parent != storage_resolved:
-        raise ValueError("Папка товаров выходит за пределы проекта.")
 
     target = products_dir / name
     if target.is_symlink():
@@ -277,13 +296,7 @@ def _product_file_metadata(path: Path) -> dict[str, Any]:
 
 def _list_product_files(root: Path) -> list[dict[str, Any]]:
     root = Path(root).resolve()
-    storage_dir = root / "storage"
-    products_dir = storage_dir / "products"
-    products_dir.mkdir(parents=True, exist_ok=True)
-    if storage_dir.is_symlink() or products_dir.is_symlink():
-        raise ValueError("Папки storage и storage/products не должны быть символическими ссылками.")
-    if storage_dir.resolve().parent != root or products_dir.resolve().parent != storage_dir.resolve():
-        raise ValueError("Папка товаров выходит за пределы проекта.")
+    products_dir = _ensure_safe_directory(root, "storage", "products")
     files = []
     for path in products_dir.iterdir():
         if not path.is_file() or path.is_symlink():
@@ -326,8 +339,9 @@ def _save_product_file(root: Path, filename: Any, content: Any) -> dict[str, Any
 
     backup_path: Path | None = None
     if path.is_file():
-        backup_dir = root / "storage" / "config_backups" / "products"
-        backup_dir.mkdir(parents=True, exist_ok=True)
+        backup_dir = _ensure_safe_directory(
+            root, "storage", "config_backups", "products"
+        )
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         backup_path = backup_dir / f"{path.name}.{stamp}.bak"
         shutil.copy2(path, backup_path)
