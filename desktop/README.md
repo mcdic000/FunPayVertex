@@ -34,7 +34,7 @@ Alternatively, after installation, launch with `python -m desktop`.
 2. Open FunPay Assistant Desktop and press **Запустить движок**.
 3. Confirm the warning. The engine will use the automation switches and settings already stored in `configs`.
 
-When connected, the desktop process starts the existing Vertex engine in a separate child process. This keeps polling and engine worker threads away from the Qt UI thread. The home page shows the account, lot count, and a feed of Vertex events. The Orders page loads the sales list from FunPay. The Messages page loads chats and their message history and supports sending text messages after an explicit confirmation.
+When connected, the desktop process starts the existing Vertex engine in a separate child process. This keeps polling and engine worker threads away from the Qt UI thread. The home page shows the account, lot count, and a feed of Vertex events. The Orders page loads the sales list, supports local search, and opens a detailed order summary on double-click. The Messages page loads chats and their message history and supports sending text messages after an explicit confirmation.
 
 **Important:** if auto-response, auto-delivery, auto-raise, or other automations are enabled in the Vertex configuration, they will run when the engine starts. Review `configs/_main.cfg`, `configs/auto_response.cfg`, and `configs/auto_delivery.cfg` before connecting.
 
