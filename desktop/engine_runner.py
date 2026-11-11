@@ -439,6 +439,10 @@ def _handle_command(vertex: Any, command: dict[str, Any]) -> dict[str, Any]:
     action = command.get("action")
     account = vertex.account
 
+    if action == "shutdown":
+        vertex.stop()
+        return {"stopping": True}
+
     if action == "get_orders":
         start_from = command.get("start_from")
         locale = command.get("locale")
