@@ -46,7 +46,7 @@ Only one Vertex process should use the same FunPay account/configuration at a ti
 - `engine_runner.py`: startup adapter that loads the existing Vertex configuration, initializes the engine, and forwards selected events to the desktop.
 - Existing `vertex.py`, `FunPayAPI/`, and Telegram modules remain the automation engine.
 
-Orders and basic chat workflows are now connected to the Vertex account API. Lot editing, automation settings, analytics, notification preferences, and advanced order actions still need their dedicated UI/service modules.
+Orders, basic chat workflows, and global auto-delivery/auto-response/auto-raise switches are now connected to the Vertex account API. Automation switches are saved back to the existing local Vertex configuration. Lot editing, automation settings, analytics, notification preferences, and advanced order actions still need their dedicated UI/service modules.
 
 ## Security and licensing
 
