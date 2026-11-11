@@ -526,6 +526,58 @@ class DesktopBridgeSerializationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Поддерживаются"):
                 _prepare_image_payload(str(unsupported))
 
+
+    def test_send_image_command_passes_png_bytes_to_vertex_api(self):
+        with tempfile.TemporaryDirectory() as directory:
+            image_path = Path(directory) / "picture.jpg"
+            Image.new("RGB", (12, 10), (200, 30, 80)).save(image_path, format="JPEG")
+            sent = {}
+
+            class FakeAccount:
+                def get_chat_by_id(self, chat_id, make_request=False):
+                    return SimpleNamespace(name="Buyer")
+
+                def get_chat_history(self, _chat_id, interlocutor_username=None):
+                    return []
+
+                def send_image(self, chat_id, image, chat_name=None, interlocutor_id=None):
+                    sent.update({
+                        "chat_id": chat_id,
+                        "image": image,
+                        "chat_name": chat_name,
+                        "interlocutor_id": interlocutor_id,
+                    })
+                    return SimpleNamespace(
+                        id=55, text=None, image_link="https://example.invalid/image.png",
+                        image_name="picture.png", author="Seller", author_id=1,
+                        by_bot=False, by_vertex=False,
+                    )
+
+            vertex = SimpleNamespace(account=FakeAccount(), runner=None)
+            result = _handle_command(vertex, {
+                "action": "send_image",
+                "chat_id": "123",
+                "image_path": str(image_path),
+            })
+            self.assertEqual(sent["chat_id"], 123)
+            self.assertEqual(sent["chat_name"], "Buyer")
+            self.assertTrue(sent["image"].startswith(b"\x89PNG\r\n\x1a\n"))
+            self.assertEqual(result["chat_id"], "123")
+            self.assertEqual(result["message"]["id"], "55")
+
+    def test_shutdown_command_uses_vertex_stop_method(self):
+        state = {"stopped": False}
+
+        class FakeVertex:
+            account = object()
+
+            def stop(self):
+                state["stopped"] = True
+
+        result = _handle_command(FakeVertex(), {"action": "shutdown"})
+        self.assertTrue(state["stopped"])
+        self.assertEqual(result, {"stopping": True})
+
     def test_message_serializes_text_and_author(self):
         message = SimpleNamespace(
             id=7, text="Hi", image_link=None, author="Buyer", author_id=42,
