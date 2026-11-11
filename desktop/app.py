@@ -1422,7 +1422,7 @@ class DesktopWindow(QMainWindow):
                 json.dumps({"time": timestamp, "message": message}, ensure_ascii=False)
                 for timestamp, message in reversed(self._activity_history[:250])
             ]
-            path.write_text("\\n".join(lines) + ("\\n" if lines else ""), encoding="utf-8")
+            path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
         except OSError:
             # A full disk or read-only folder must not break incoming chat/order events.
             pass
