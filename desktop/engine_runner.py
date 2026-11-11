@@ -151,7 +151,7 @@ def _save_rule_config(vertex: Any, root: Path, name: str, content: str) -> dict[
         raise ValueError("Содержимое конфигурации должно быть текстом")
     if len(content.encode("utf-8")) > 1_000_000:
         raise ValueError("Файл конфигурации слишком большой (максимум 1 МБ)")
-    if "\x00" in content:
+    if chr(0) in content:
         raise ValueError("Конфигурация содержит недопустимый нулевой символ")
 
     root = Path(root).resolve()
@@ -276,10 +276,14 @@ def _product_file_metadata(path: Path) -> dict[str, Any]:
 
 
 def _list_product_files(root: Path) -> list[dict[str, Any]]:
-    products_dir = root / "storage" / "products"
+    root = Path(root).resolve()
+    storage_dir = root / "storage"
+    products_dir = storage_dir / "products"
     products_dir.mkdir(parents=True, exist_ok=True)
-    if products_dir.is_symlink():
-        raise ValueError("Папка storage/products не должна быть символической ссылкой.")
+    if storage_dir.is_symlink() or products_dir.is_symlink():
+        raise ValueError("Папки storage и storage/products не должны быть символическими ссылками.")
+    if storage_dir.resolve().parent != root or products_dir.resolve().parent != storage_dir.resolve():
+        raise ValueError("Папка товаров выходит за пределы проекта.")
     files = []
     for path in products_dir.iterdir():
         if not path.is_file() or path.is_symlink():
@@ -317,7 +321,7 @@ def _save_product_file(root: Path, filename: Any, content: Any) -> dict[str, Any
         raise ValueError("Содержимое файла товаров должно быть текстом.")
     if len(content.encode("utf-8")) > 5 * 1024 * 1024:
         raise ValueError("Файл товаров слишком большой (максимум 5 МБ).")
-    if "\\x00" in content:
+    if chr(0) in content:
         raise ValueError("Файл товаров содержит недопустимый нулевой символ.")
 
     backup_path: Path | None = None
