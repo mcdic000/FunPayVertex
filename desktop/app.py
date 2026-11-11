@@ -62,7 +62,9 @@ class DesktopWindow(QMainWindow):
         for title, _ in self.PAGES:
             self.navigation.addItem(QListWidgetItem(title))
         sidebar_layout.addWidget(self.navigation, 1)
-        sidebar_layout.addWidget(QLabel("Desktop • ранняя версия", objectName="muted"))
+        sidebar_footer = QLabel("Desktop • ранняя версия")
+        sidebar_footer.setObjectName("muted")
+        sidebar_layout.addWidget(sidebar_footer)
 
         content = QWidget()
         content_layout = QVBoxLayout(content)
@@ -403,25 +405,10 @@ class DesktopWindow(QMainWindow):
         self.orders_summary.setText(f"Загружено заказов: {len(orders)}")
 
     def _upsert_order(self, order: dict) -> None:
-        order_id = str(order.get("id", ""))
-        if not order_id:
-            return
-        for row in range(self.order_table.rowCount()):
-            if self.order_table.item(row, 0).text() == order_id:
-                orders = []
-                for r in range(self.order_table.rowCount()):
-                    orders.append({
-                        "id": self.order_table.item(r, 0).text(),
-                        "buyer": self.order_table.item(r, 1).text(),
-                        "description": self.order_table.item(r, 2).text(),
-                        "price": self.order_table.item(r, 3).text(),
-                        "status": self.order_table.item(r, 4).text(),
-                        "date": self.order_table.item(r, 5).text(),
-                    })
-                orders[row] = {**orders[row], **order}
-                self._set_orders(orders)
-                return
-        self._send_command("get_orders")
+        # The event carries only a shortcut snapshot. Refresh the canonical
+        # sales list rather than merging partial fields into formatted table data.
+        if order.get("id"):
+            self._send_command("get_orders")
 
     def _set_chats(self, chats: list[dict]) -> None:
         selected = self._selected_chat_id
