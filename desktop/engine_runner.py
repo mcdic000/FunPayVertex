@@ -246,19 +246,36 @@ def _get_desktop_preferences(config: Any) -> dict[str, bool]:
     return result
 
 
-def _collect_sales(account: Any, max_pages: int = 10) -> tuple[list[Any], bool]:
-    """Collect a bounded, deduplicated window of recent sales using Vertex pagination."""
-    next_id, page, locale, _subcategories = account.get_sales(
-        include_paid=True, include_closed=True, include_refunded=True
-    )
-    orders = list(page)
-    seen_ids = {str(getattr(order, "id", "")) for order in orders}
-    pages = 1
-    has_more = bool(next_id)
+def _collect_sales(
+    account: Any,
+    max_pages: int = 10,
+    start_from: str | None = None,
+    locale: str | None = None,
+) -> tuple[list[Any], str | None, str | None, bool]:
+    """Collect up to max_pages sales pages and return the continuation cursor."""
+    orders: list[Any] = []
+    seen_ids: set[str] = set()
+    pages = 0
+
+    if start_from is None:
+        next_id, page, locale, _subcategories = account.get_sales(
+            include_paid=True,
+            include_closed=True,
+            include_refunded=True,
+            locale=locale,
+        )
+        pages += 1
+        for order in page:
+            order_id = str(getattr(order, "id", ""))
+            orders.append(order)
+            if order_id:
+                seen_ids.add(order_id)
+    else:
+        next_id = start_from
 
     while next_id and pages < max_pages:
         cursor = str(next_id)
-        next_cursor, page, _locale, _subcategories = account.get_sales(
+        next_cursor, page, page_locale, _subcategories = account.get_sales(
             start_from=cursor,
             include_paid=True,
             include_closed=True,
@@ -266,22 +283,26 @@ def _collect_sales(account: Any, max_pages: int = 10) -> tuple[list[Any], bool]:
             locale=locale,
         )
         pages += 1
+        locale = page_locale or locale
+
         if not page:
-            has_more = False
+            next_id = next_cursor
             break
+
         for order in page:
             order_id = str(getattr(order, "id", ""))
             if not order_id or order_id not in seen_ids:
                 orders.append(order)
                 if order_id:
                     seen_ids.add(order_id)
-        if next_cursor == next_id:
-            has_more = True
+
+        if next_cursor is not None and str(next_cursor) == cursor:
+            next_id = next_cursor
             break
         next_id = next_cursor
-        has_more = bool(next_id)
 
-    return orders, has_more
+    return orders, next_id, locale, bool(next_id)
+
 
 def _order_analytics(orders: list[Any]) -> dict[str, Any]:
     from collections import defaultdict
@@ -578,11 +599,24 @@ def _handle_command(vertex: Any, command: dict[str, Any]) -> dict[str, Any]:
         return {"lots": lots, "count": len(lots), "deleted_lot_id": lot_id}
 
     if action == "get_analytics":
-        orders, has_more = _collect_sales(account, max_pages=10)
+        start_from = command.get("start_from")
+        locale = command.get("locale")
+        if start_from is not None and not isinstance(start_from, str):
+            raise ValueError("Некорректный курсор аналитики")
+        if locale is not None and locale not in ("ru", "en", "uk"):
+            raise ValueError("Некорректный язык аналитики")
+        orders, next_cursor, used_locale, has_more = _collect_sales(
+            account, max_pages=10, start_from=start_from, locale=locale
+        )
         analytics = _order_analytics(orders)
         analytics["sampled_sales"] = len(orders)
         analytics["has_more"] = has_more
-        return {"analytics": analytics}
+        return {
+            "analytics": analytics,
+            "next_cursor": next_cursor,
+            "locale": used_locale,
+            "append": bool(start_from),
+        }
 
     if action == "get_preferences":
         return {"preferences": _get_desktop_preferences(vertex.MAIN_CFG)}
