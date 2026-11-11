@@ -3,7 +3,8 @@ from datetime import date, datetime
 from types import SimpleNamespace
 
 from desktop.engine_runner import (
-    _collect_sales, _order_analytics, _refresh_profile, serialize_chat, serialize_lot,
+    _collect_sales, _currency_editor_payload, _order_analytics, _refresh_profile,
+    serialize_chat, serialize_lot,
     serialize_message, serialize_order,
 )
 
@@ -75,6 +76,19 @@ class DesktopBridgeSerializationTests(unittest.TestCase):
         self.assertEqual(result["category_name"], "Test Game")
         self.assertNotIn("html", result)
         self.assertNotIn("private widget", str(result))
+
+
+    def test_currency_editor_payload_uses_desktop_lot_cache(self):
+        offer = SimpleNamespace(price=4.25, amount=9, active=False)
+        result = _currency_editor_payload(
+            {"title": "My currency offer"},
+            offer,
+        )
+        self.assertEqual(result["title"], "My currency offer")
+        self.assertEqual(result["price"], 4.25)
+        self.assertEqual(result["amount"], 9)
+        self.assertFalse(result["active"])
+        self.assertTrue(result["is_currency"])
 
     def test_order_analytics_groups_by_date_and_counts_statuses(self):
         orders = [
