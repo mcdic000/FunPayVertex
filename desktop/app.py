@@ -40,6 +40,7 @@ class DesktopWindow(QMainWindow):
         self._selected_chat_id: str | None = None
         self._chats: dict[str, dict] = {}
         self._lots: dict[str, dict] = {}
+        self._create_categories: list[dict] = []
         self._activity_history: list[tuple[str, str]] = []
         self.preference_checks: dict[str, QCheckBox] = {}
         self._analytics_loaded = False
@@ -294,6 +295,10 @@ class DesktopWindow(QMainWindow):
         refresh_lots = QPushButton("Обновить")
         refresh_lots.clicked.connect(lambda: self._send_command("get_lots"))
         lots_toolbar.addWidget(refresh_lots)
+        create_lot_button = QPushButton("Создать лот")
+        create_lot_button.setObjectName("primaryButton")
+        create_lot_button.clicked.connect(self._choose_create_category)
+        lots_toolbar.addWidget(create_lot_button)
         lots_box.addLayout(lots_toolbar)
         self.lot_table = QTableWidget(0, 8)
         self.lot_table.setHorizontalHeaderLabels(
@@ -612,6 +617,7 @@ class DesktopWindow(QMainWindow):
             self._send_command("get_chats")
             self._send_command("get_settings")
             self._send_command("get_lots")
+            self._send_command("get_create_categories")
             self._send_command("get_analytics")
             self._send_command("get_preferences")
         elif kind == "setup_required":
@@ -676,6 +682,11 @@ class DesktopWindow(QMainWindow):
             self.automation_status.setText("Настройки загружены из configs/_main.cfg")
         elif action == "get_lots":
             self._set_lots(data.get("lots", []))
+        elif action == "get_create_categories":
+            self._create_categories = data.get("categories", [])
+            self.lot_status.setText(
+                f"Справочник FunPay загружен: {len(self._create_categories)} подкатегорий."
+            )
         elif action == "get_lot_editor":
             self._show_lot_editor(data)
         elif action in ("update_lot", "delete_lot"):
@@ -824,6 +835,105 @@ class DesktopWindow(QMainWindow):
             )
             return
         QDesktopServices.openUrl(QUrl(url))
+
+    def _choose_create_category(self) -> None:
+        if self.engine_process.state() != QProcess.ProcessState.Running:
+            QMessageBox.information(
+                self, "Движок не подключён",
+                "Подключи аккаунт, чтобы загрузить справочник категорий FunPay.",
+            )
+            return
+        if not self._create_categories:
+            self._send_command("get_create_categories")
+            QMessageBox.information(
+                self, "Загружаю категории",
+                "Справочник категорий запрошен. Нажми «Создать лот» ещё раз после загрузки.",
+            )
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Создание лота или предложения")
+        dialog.setMinimumSize(620, 560)
+        layout = QVBoxLayout(dialog)
+        description = QLabel(
+            "Выбери игру и подкатегорию. FunPay откроет штатную форму для создания предложения "
+            "со всеми обязательными полями выбранной категории."
+        )
+        description.setWordWrap(True)
+        description.setObjectName("muted")
+        layout.addWidget(description)
+
+        search = QLineEdit()
+        search.setPlaceholderText("Поиск игры или подкатегории...")
+        layout.addWidget(search)
+        category_list = QListWidget()
+        for category in self._create_categories:
+            kind_label = (
+                "Валютное предложение" if category.get("type") == "CURRENCY"
+                else "Обычный лот"
+            )
+            category_name = category.get("category_name") or "Игра"
+            subcategory_name = category.get("name") or category.get("fullname") or "Подкатегория"
+            item = QListWidgetItem(f"{category_name}  /  {subcategory_name}  ·  {kind_label}")
+            item.setData(Qt.ItemDataRole.UserRole, category)
+            category_list.addItem(item)
+        layout.addWidget(category_list, 1)
+
+        def filter_categories(query: str) -> None:
+            needle = query.casefold().strip()
+            for index in range(category_list.count()):
+                item = category_list.item(index)
+                item.setHidden(bool(needle) and needle not in item.text().casefold())
+            for index in range(category_list.count()):
+                item = category_list.item(index)
+                if not item.isHidden():
+                    category_list.setCurrentItem(item)
+                    break
+
+        search.textChanged.connect(filter_categories)
+        category_list.itemDoubleClicked.connect(lambda _item: dialog.accept())
+        if category_list.count():
+            category_list.setCurrentRow(0)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Open | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        selected = category_list.currentItem()
+        if selected is None or selected.isHidden():
+            QMessageBox.information(self, "Категория не выбрана", "Выбери подкатегорию из списка.")
+            return
+        category = selected.data(Qt.ItemDataRole.UserRole) or {}
+        link = category.get("create_link")
+        if not link:
+            QMessageBox.warning(self, "Форма недоступна", "Для категории не найдена форма FunPay.")
+            return
+        kind_label = (
+            "валютное предложение" if category.get("type") == "CURRENCY" else "обычный лот"
+        )
+        answer = QMessageBox.information(
+            self, "Открыть форму FunPay?",
+            f"Открываю форму создания: {category.get('category_name', '')} / "
+            f"{category.get('name', '')} ({kind_label}).\n\n"
+            "Форма откроется в браузере. Для сохранения может потребоваться авторизация "
+            "в FunPay в этом браузере.",
+            QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Ok,
+        )
+        if answer != QMessageBox.StandardButton.Ok:
+            return
+        if QDesktopServices.openUrl(QUrl(link)):
+            self._add_activity(
+                f"Открыта форма создания: {category.get('category_name', '')} / "
+                f"{category.get('name', '')}"
+            )
+        else:
+            QMessageBox.warning(self, "Не удалось открыть ссылку", "Открой ссылку вручную в браузере.")
 
     def _raise_selected_category(self) -> None:
         category_id = self.raise_category_combo.currentData()
