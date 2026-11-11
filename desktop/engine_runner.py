@@ -234,13 +234,15 @@ DESKTOP_PREFERENCE_KEYS = {
 
 
 def _get_desktop_preferences(config: Any) -> dict[str, bool]:
+    """Return only preferences that already exist in the user's Vertex config."""
     result = {}
     for section_name, keys in DESKTOP_PREFERENCE_KEYS.items():
         if section_name not in config:
             continue
         section = config[section_name]
         for key in keys:
-            result[f"{section_name}.{key}"] = section.getboolean(key, fallback=False)
+            if key in section:
+                result[f"{section_name}.{key}"] = section.getboolean(key)
     return result
 
 
@@ -377,10 +379,25 @@ def _handle_command(vertex: Any, command: dict[str, Any]) -> dict[str, Any]:
     account = vertex.account
 
     if action == "get_orders":
-        _next, orders, _locale, _subcategories = account.get_sales(
-            include_paid=True, include_closed=True, include_refunded=True
+        start_from = command.get("start_from")
+        locale = command.get("locale")
+        if start_from is not None and not isinstance(start_from, str):
+            raise ValueError("Некорректный курсор списка заказов")
+        if locale is not None and locale not in ("ru", "en", "uk"):
+            raise ValueError("Некорректный язык списка заказов")
+        next_cursor, orders, used_locale, _subcategories = account.get_sales(
+            start_from=start_from,
+            include_paid=True,
+            include_closed=True,
+            include_refunded=True,
+            locale=locale,
         )
-        return {"orders": [serialize_order(order) for order in orders]}
+        return {
+            "orders": [serialize_order(order) for order in orders],
+            "next_cursor": next_cursor,
+            "locale": used_locale,
+            "append": bool(start_from),
+        }
 
     if action == "get_settings":
         funpay_config = vertex.MAIN_CFG["FunPay"]
@@ -583,6 +600,8 @@ def _handle_command(vertex: Any, command: dict[str, Any]) -> dict[str, Any]:
             raise ValueError("Недопустимые параметры настроек")
         for full_key, value in updates.items():
             section_name, key = full_key.split(".", 1)
+            if section_name not in vertex.MAIN_CFG or key not in vertex.MAIN_CFG[section_name]:
+                raise ValueError(f"Параметр {full_key} отсутствует в текущей конфигурации Vertex")
             vertex.MAIN_CFG[section_name][key] = "1" if value else "0"
         vertex.save_config(vertex.MAIN_CFG, "configs/_main.cfg")
         return {"preferences": _get_desktop_preferences(vertex.MAIN_CFG)}
