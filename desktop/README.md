@@ -1,16 +1,10 @@
 # FunPay Assistant Desktop
 
-Desktop client foundation for Windows 11.
-
-## Status
-
-This directory is the starting point for a desktop application that will connect to the existing FunPay Vertex engine. The current milestone provides a navigation shell only; it does not yet connect to FunPay or perform account actions.
+Desktop client foundation for Windows 11, built around the existing FunPay Vertex engine.
 
 ## Run on Windows
 
-Requires Python 3.11 or newer.
-
-From PowerShell, in the repository folder:
+Requires Python 3.11 or newer. Open PowerShell in the repository root:
 
 ```powershell
 cd desktop
@@ -20,23 +14,30 @@ python -m pip install -e .
 funpay-assistant
 ```
 
-Alternatively, after installation, launch with `python -m desktop`.
+The same app can be started with `python -m desktop` after installation.
 
-## Planned architecture
+## First connection
 
-- `ui/`: desktop user interface and navigation.
-- `services/`: application services and orchestration.
-- `integration/`: adapters around the existing FunPay Vertex / FunPayAPI code.
-- `config/`: desktop-specific settings and secure credential handling.
+1. Run the original `Start.bat` in the repository root once and finish the Vertex first-run setup. This creates `configs/_main.cfg`.
+2. Return to FunPay Assistant Desktop and press **Запустить движок**.
+3. Confirm the warning. The engine will use the automation switches and settings already stored in `configs`.
 
-## Development principles
+When connected, the desktop process starts the existing Vertex engine in a separate child process. This keeps polling and engine worker threads away from the Qt UI thread. The home page shows the account, lot count, and a small feed of Vertex events.
 
-1. Keep the existing Vertex engine separate from the desktop UI.
-2. Do not start network polling or automate account actions until the user explicitly connects and enables the relevant feature.
-3. Never store FunPay session cookies or tokens in source code or logs.
-4. Preserve upstream copyright notices and GPL-3.0 licensing obligations.
-5. Keep the existing Telegram interface functional while desktop functionality is added.
+**Important:** if auto-response, auto-delivery, auto-raise, or other automations are enabled in the Vertex configuration, they will run when the engine starts. Review `configs/_main.cfg`, `configs/auto_response.cfg`, and `configs/auto_delivery.cfg` before connecting.
 
-## Initial milestone
+Only one Vertex process should use the same FunPay account/configuration at a time. Do not run the desktop engine and the original `Start.bat` bot simultaneously.
 
-Build a desktop shell with navigation, connection status, safe settings storage, and a service boundary. Feature modules (orders, chat, auto-delivery, lots, analytics, notifications) will be implemented incrementally and tested against current FunPay site behavior.
+## Architecture
+
+- `app.py`: PySide6 desktop interface and child-process controller.
+- `engine_runner.py`: startup adapter that loads the existing Vertex configuration, initializes the engine, and forwards selected events to the desktop.
+- Existing `vertex.py`, `FunPayAPI/`, and Telegram modules remain the automation engine.
+
+The desktop bridge currently reports connection state and a basic activity feed. Orders, chat contents, lot editing, automation settings, analytics, and notifications still need their dedicated UI/service modules.
+
+## Security and licensing
+
+- Never commit FunPay session cookies, `golden_key`, Telegram tokens, or other credentials.
+- The existing Vertex configuration format is reused for this initial integration. Treat the local `configs` directory as sensitive and do not share it.
+- The upstream Vertex code is GPL-3.0; retain its notices and meet the license requirements for modified/redistributed versions.
