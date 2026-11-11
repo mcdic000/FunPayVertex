@@ -18,6 +18,82 @@ from PySide6.QtWidgets import (
 )
 
 
+class RuleConfigDialog(QDialog):
+    """In-app editor for Vertex's validated auto-response/auto-delivery config files."""
+
+    def __init__(self, title: str, config_name: str, file_path: Path, submit_callback, parent=None):
+        super().__init__(parent)
+        self.config_name = config_name
+        self.file_path = file_path
+        self.submit_callback = submit_callback
+        self.setWindowTitle(title)
+        self.setMinimumSize(820, 620)
+
+        layout = QVBoxLayout(self)
+        intro = QLabel(
+            f"Файл: {file_path.name}. Перед записью Vertex проверит структуру и связанные файлы. "
+            "При успешном сохранении правила применятся в работающем движке без перезапуска."
+        )
+        intro.setObjectName("muted")
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+
+        self.editor = QTextEdit()
+        self.editor.setAcceptRichText(False)
+        self.editor.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
+        try:
+            self.editor.setPlainText(file_path.read_text(encoding="utf-8") if file_path.is_file() else "")
+        except OSError as exc:
+            self.editor.setPlainText("")
+            self._load_error = str(exc)
+        else:
+            self._load_error = None
+        layout.addWidget(self.editor, 1)
+
+        self.status = QLabel(
+            f"Не удалось прочитать файл: {self._load_error}"
+            if self._load_error else
+            ("Файл не найден — он будет создан при успешном сохранении."
+             if not file_path.is_file() else "Готово к проверке и сохранению.")
+        )
+        self.status.setObjectName("muted")
+        self.status.setWordWrap(True)
+        layout.addWidget(self.status)
+
+        actions = QHBoxLayout()
+        actions.addStretch(1)
+        self.save_button = QPushButton("Проверить и сохранить")
+        self.save_button.setObjectName("primaryButton")
+        self.save_button.clicked.connect(self._submit)
+        actions.addWidget(self.save_button)
+        cancel = QPushButton("Закрыть")
+        cancel.clicked.connect(self.reject)
+        actions.addWidget(cancel)
+        layout.addLayout(actions)
+
+    def _submit(self) -> None:
+        if self._load_error:
+            self.status.setText(f"Нельзя сохранить: исходный файл не прочитан ({self._load_error}).")
+            return
+        if self.submit_callback(self.config_name, self.editor.toPlainText()):
+            self.save_button.setEnabled(False)
+            self.status.setText("Проверяю структуру и связанные файлы Vertex...")
+
+    def set_result(self, data: dict | None = None, error: str | None = None) -> None:
+        self.save_button.setEnabled(True)
+        if error:
+            self.status.setText(f"Проверка не пройдена; старый файл сохранён без изменений. {error}")
+            return
+        config = (data or {}).get("config", {})
+        backup = config.get("backup")
+        backup_text = f" Резервная копия: {backup}." if backup else " Предыдущего файла не было."
+        self.status.setText(
+            f"Проверено и сохранено: разделов {config.get('sections', 0)}, "
+            f"размер {config.get('bytes', 0)} байт.{backup_text}"
+        )
+        self.editor.document().setModified(False)
+
+
 class DesktopWindow(QMainWindow):
     PROTOCOL_PREFIX = "FPV_DESKTOP:"
     PAGES = (
@@ -56,6 +132,7 @@ class DesktopWindow(QMainWindow):
         self._analytics_gross_total = 0.0
         self._analytics_status_counts: dict[str, int] = {}
         self._analytics_daily: dict[str, dict] = {}
+        self._rule_config_dialog: RuleConfigDialog | None = None
 
         self.setWindowTitle("FunPay Assistant")
         self.resize(1180, 760)
@@ -521,10 +598,10 @@ class DesktopWindow(QMainWindow):
             lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.project_root / "configs")))
         )
         preference_actions.addWidget(open_config_folder)
-        open_auto_response = QPushButton("Правила автоответов")
+        open_auto_response = QPushButton("Редактировать правила автоответов")
         open_auto_response.clicked.connect(self._open_auto_response_config)
         preference_actions.addWidget(open_auto_response)
-        open_auto_delivery = QPushButton("Товары автовыдачи")
+        open_auto_delivery = QPushButton("Редактировать автовыдачу")
         open_auto_delivery.clicked.connect(self._open_auto_delivery_config)
         preference_actions.addWidget(open_auto_delivery)
         preference_actions.addStretch(1)
@@ -736,6 +813,9 @@ class DesktopWindow(QMainWindow):
                 self.lot_status.setText(f"Ошибка работы с лотом: {error}")
             elif action == "update_preferences":
                 self.preferences_status.setText(f"Не удалось сохранить настройки: {error}")
+            elif action == "update_rule_config":
+                if self._rule_config_dialog is not None:
+                    self._rule_config_dialog.set_result(error=error)
             elif action == "update_automation_settings":
                 self.automation_status.setText(f"Не удалось сохранить автоматизации: {error}")
             elif action == "send_image":
@@ -811,6 +891,14 @@ class DesktopWindow(QMainWindow):
             self._set_preferences(data.get("preferences", {}))
             self.preferences_status.setText("Дополнительные настройки сохранены.")
             self._add_activity("Настройки Vertex сохранены")
+        elif action == "update_rule_config":
+            config = data.get("config", {})
+            if self._rule_config_dialog is not None:
+                self._rule_config_dialog.set_result(data)
+            self._add_activity(
+                f"Правила {config.get('file', 'Vertex')} проверены и сохранены; "
+                f"разделов: {config.get('sections', 0)}"
+            )
         elif action == "update_automation_settings":
             self.automation_status.setText("Настройки автоматизаций сохранены.")
             self._add_activity("Настройки автоматизаций сохранены")
@@ -1352,19 +1440,59 @@ class DesktopWindow(QMainWindow):
         if answer == QMessageBox.StandardButton.Yes:
             self._send_command("update_preferences", preferences=preferences)
 
-    def _open_auto_response_config(self) -> None:
-        path = self.project_root / "configs" / "auto_response.cfg"
-        if not path.is_file():
-            QMessageBox.information(self, "Файл не найден", "Сначала выполни первичную настройку Vertex.")
+    def _open_rule_config_editor(self, name: str, title: str, filename: str) -> None:
+        if self.engine_process.state() != QProcess.ProcessState.Running:
+            QMessageBox.information(
+                self, "Движок не запущен",
+                "Для проверки и применения правил сначала подключи Vertex.",
+            )
             return
-        QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+        if self._rule_config_dialog is not None:
+            self._rule_config_dialog.show()
+            self._rule_config_dialog.raise_()
+            self._rule_config_dialog.activateWindow()
+            return
+
+        dialog = RuleConfigDialog(
+            title, name, self.project_root / "configs" / filename,
+            self._submit_rule_config, self,
+        )
+        self._rule_config_dialog = dialog
+        dialog.finished.connect(
+            lambda _result, current=dialog:
+                setattr(self, "_rule_config_dialog", None)
+                if self._rule_config_dialog is current else None
+        )
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def _submit_rule_config(self, name: str, content: str) -> bool:
+        if self.engine_process.state() != QProcess.ProcessState.Running:
+            QMessageBox.information(self, "Движок не запущен", "Подключи Vertex перед сохранением правил.")
+            return False
+        filename = "auto_response.cfg" if name == "auto_response" else "auto_delivery.cfg"
+        answer = QMessageBox.warning(
+            self, "Проверить и применить правила?",
+            f"Vertex проверит файл {filename}. Если всё корректно, текущие правила будут заменены, "
+            "а изменения начнут работать в этом сеансе. Предыдущая версия будет сохранена в резервную копию.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return False
+        self._send_command("update_rule_config", name=name, content=content)
+        return True
+
+    def _open_auto_response_config(self) -> None:
+        self._open_rule_config_editor(
+            "auto_response", "Редактор правил автоответов", "auto_response.cfg"
+        )
 
     def _open_auto_delivery_config(self) -> None:
-        path = self.project_root / "configs" / "auto_delivery.cfg"
-        if not path.is_file():
-            QMessageBox.information(self, "Файл не найден", "Сначала выполни первичную настройку Vertex.")
-            return
-        QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+        self._open_rule_config_editor(
+            "auto_delivery", "Редактор правил автовыдачи", "auto_delivery.cfg"
+        )
 
     def _export_table_csv(self, table: QTableWidget, default_name: str) -> None:
         path, _ = QFileDialog.getSaveFileName(
