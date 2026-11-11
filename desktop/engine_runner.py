@@ -561,6 +561,26 @@ def _handle_command(vertex: Any, command: dict[str, Any]) -> dict[str, Any]:
         lots = _refresh_profile(vertex)
         return {"lots": lots, "count": len(lots), "saved_lot_id": lot_id}
 
+    if action == "send_review_reply":
+        order_id = str(command.get("order_id", "")).lstrip("#").strip()
+        reply_text = command.get("text", "")
+        if not order_id:
+            raise ValueError("Не указан ID заказа")
+        if not isinstance(reply_text, str) or not reply_text.strip():
+            raise ValueError("Ответ на отзыв не может быть пустым")
+        if len(reply_text) > 4000:
+            raise ValueError("Ответ на отзыв слишком длинный (максимум 4000 символов)")
+        order = account.get_order(order_id, include_review=True)
+        review = getattr(order, "review", None)
+        if review is None or not getattr(review, "text", None):
+            raise ValueError("У этого заказа пока нет отзыва, на который можно ответить")
+        account.send_review(order_id, reply_text.strip())
+        return {
+            "order_id": order_id,
+            "reply": reply_text.strip(),
+            "updated": bool(getattr(review, "reply", None)),
+        }
+
     if action == "raise_category":
         try:
             category_id = int(command.get("category_id"))
