@@ -101,9 +101,10 @@ def main() -> int:
             auto_response_config,
             raw_auto_response_config,
             "2.0.0",
-        ).init()
-
+        )
+        # Register the bridge before init() so startup hooks are also observable.
         _register_desktop_events(vertex)
+        vertex.init()
         profile = getattr(vertex, "profile", None)
         lots_count = len(profile.get_lots()) if profile else 0
         emit({
