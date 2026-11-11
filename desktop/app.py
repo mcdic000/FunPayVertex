@@ -12,7 +12,7 @@ from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
     QDoubleSpinBox, QFormLayout, QFrame, QHBoxLayout, QHeaderView, QLabel,
-    QFileDialog, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QScrollArea,
+    QFileDialog, QInputDialog, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QScrollArea,
     QPushButton, QSpinBox, QStackedWidget, QStyle, QSystemTrayIcon,
     QTableWidget, QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget,
 )
@@ -94,6 +94,161 @@ class RuleConfigDialog(QDialog):
         self.editor.document().setModified(False)
 
 
+class ProductFilesDialog(QDialog):
+    """Browse and edit the local stock files used by Vertex auto-delivery rules."""
+
+    def __init__(self, read_callback, save_callback, parent=None):
+        super().__init__(parent)
+        self.read_callback = read_callback
+        self.save_callback = save_callback
+        self._loading = False
+        self._current_filename: str | None = None
+        self.setWindowTitle("Файлы товаров автовыдачи")
+        self.resize(980, 680)
+        self.setMinimumSize(820, 560)
+
+        root = QHBoxLayout(self)
+        left = QVBoxLayout()
+        heading = QLabel("Склад товаров")
+        heading.setObjectName("sectionTitle")
+        left.addWidget(heading)
+        intro = QLabel("Файлы из storage/products. Один непустой ряд — один товар.")
+        intro.setObjectName("muted")
+        intro.setWordWrap(True)
+        left.addWidget(intro)
+        self.file_list = QListWidget()
+        self.file_list.currentItemChanged.connect(self._on_selected)
+        left.addWidget(self.file_list, 1)
+        list_actions = QHBoxLayout()
+        refresh = QPushButton("Обновить")
+        refresh.clicked.connect(self.request_files)
+        list_actions.addWidget(refresh)
+        new_file = QPushButton("Новый файл")
+        new_file.clicked.connect(self._new_file)
+        list_actions.addWidget(new_file)
+        left.addLayout(list_actions)
+        root.addLayout(left, 1)
+
+        right = QVBoxLayout()
+        file_label = QLabel("Файл")
+        file_label.setObjectName("sectionTitle")
+        right.addWidget(file_label)
+        self.filename_input = QLineEdit()
+        self.filename_input.setPlaceholderText("Например, blade_ball.txt")
+        right.addWidget(self.filename_input)
+        self.editor = QTextEdit()
+        self.editor.setAcceptRichText(False)
+        self.editor.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
+        self.editor.setPlaceholderText("Вставь товары: один товар на строку.")
+        right.addWidget(self.editor, 1)
+        self.meta = QLabel("Выбери файл слева или создай новый.")
+        self.meta.setObjectName("muted")
+        self.meta.setWordWrap(True)
+        right.addWidget(self.meta)
+        actions = QHBoxLayout()
+        actions.addStretch(1)
+        self.save_button = QPushButton("Сохранить файл")
+        self.save_button.setObjectName("primaryButton")
+        self.save_button.clicked.connect(self._save)
+        actions.addWidget(self.save_button)
+        close = QPushButton("Закрыть")
+        close.clicked.connect(self.reject)
+        actions.addWidget(close)
+        right.addLayout(actions)
+        root.addLayout(right, 2)
+
+    def request_files(self) -> None:
+        self.meta.setText("Обновляю список файлов...")
+        self.read_callback(None)
+
+    def set_files(self, files: list[dict]) -> None:
+        selected = self._current_filename
+        self.file_list.blockSignals(True)
+        self.file_list.clear()
+        for data in files:
+            filename = str(data.get("name", ""))
+            if not filename:
+                continue
+            products = data.get("products")
+            count_text = f"{products} товаров" if products is not None else "не удалось прочитать"
+            item = QListWidgetItem(f"{filename}  ·  {count_text}")
+            item.setData(Qt.ItemDataRole.UserRole, filename)
+            item.setToolTip(f"{data.get('bytes', 0)} байт")
+            self.file_list.addItem(item)
+            if filename == selected:
+                self.file_list.setCurrentItem(item)
+        if self.file_list.currentRow() < 0 and self.file_list.count() and selected is None:
+            self.file_list.setCurrentRow(0)
+        self.file_list.blockSignals(False)
+        if selected and self.file_list.currentItem() is None:
+            self._current_filename = None
+        self.meta.setText(f"Файлов товаров: {len(files)}")
+
+    def _on_selected(
+        self, current: QListWidgetItem | None, _previous: QListWidgetItem | None = None
+    ) -> None:
+        if current is None or self._loading:
+            return
+        filename = current.data(Qt.ItemDataRole.UserRole)
+        if filename:
+            self._current_filename = str(filename)
+            self.meta.setText(f"Загружаю {filename}...")
+            self.read_callback(str(filename))
+
+    def set_file(self, data: dict) -> None:
+        file_info = data.get("file", {})
+        filename = str(file_info.get("name", ""))
+        self._loading = True
+        self._current_filename = filename or None
+        self.filename_input.setText(filename)
+        self.editor.setPlainText(str(data.get("content", "")))
+        self.editor.document().setModified(False)
+        self._loading = False
+        self.save_button.setEnabled(True)
+        self.meta.setText(
+            f"{file_info.get('products', 0)} товаров · {file_info.get('lines', 0)} строк · "
+            f"{file_info.get('bytes', 0)} байт. Пустые строки не считаются товарами."
+        )
+
+    def _new_file(self) -> None:
+        filename, accepted = QInputDialog.getText(
+            self, "Новый файл товаров", "Имя файла (без папок):"
+        )
+        if not accepted or not filename.strip():
+            return
+        self._current_filename = None
+        self.filename_input.setText(filename.strip())
+        self.editor.clear()
+        self.editor.document().setModified(True)
+        self.meta.setText("Новый файл. Он будет создан после проверки имени и подтверждения сохранения.")
+
+    def _save(self) -> None:
+        filename = self.filename_input.text().strip()
+        if not filename:
+            QMessageBox.information(self, "Имя файла", "Укажи имя файла товаров.")
+            return
+        if self.save_callback(filename, self.editor.toPlainText()):
+            self.save_button.setEnabled(False)
+            self.meta.setText("Сохраняю файл и создаю резервную копию предыдущей версии...")
+
+    def set_save_result(self, data: dict | None = None, error: str | None = None) -> None:
+        self.save_button.setEnabled(True)
+        if error:
+            self.meta.setText(f"Не удалось сохранить. Старый файл оставлен без изменений. {error}")
+            return
+        result = (data or {}).get("file", {})
+        files = (data or {}).get("files", [])
+        self._current_filename = str(result.get("name", "")) or None
+        self.set_files(files)
+        self.editor.document().setModified(False)
+        backup = result.get("backup")
+        backup_text = f" Резервная копия: {backup}." if backup else " Создан новый файл."
+        self.meta.setText(
+            f"Сохранено: {result.get('products', 0)} товаров, "
+            f"{result.get('bytes', 0)} байт.{backup_text}"
+        )
+
+
 class DesktopWindow(QMainWindow):
     PROTOCOL_PREFIX = "FPV_DESKTOP:"
     PAGES = (
@@ -133,6 +288,7 @@ class DesktopWindow(QMainWindow):
         self._analytics_status_counts: dict[str, int] = {}
         self._analytics_daily: dict[str, dict] = {}
         self._rule_config_dialog: RuleConfigDialog | None = None
+        self._product_files_dialog: ProductFilesDialog | None = None
 
         self.setWindowTitle("FunPay Assistant")
         self.resize(1180, 760)
@@ -604,6 +760,9 @@ class DesktopWindow(QMainWindow):
         open_auto_delivery = QPushButton("Редактировать автовыдачу")
         open_auto_delivery.clicked.connect(self._open_auto_delivery_config)
         preference_actions.addWidget(open_auto_delivery)
+        open_product_files = QPushButton("Файлы товаров автовыдачи")
+        open_product_files.clicked.connect(self._open_product_files_dialog)
+        preference_actions.addWidget(open_product_files)
         preference_actions.addStretch(1)
         settings_box.addLayout(preference_actions)
         self.preferences_status = QLabel("Подключи аккаунт, чтобы загрузить параметры.")
@@ -816,6 +975,12 @@ class DesktopWindow(QMainWindow):
             elif action == "update_rule_config":
                 if self._rule_config_dialog is not None:
                     self._rule_config_dialog.set_result(error=error)
+            elif action in ("get_product_files", "get_product_file", "save_product_file"):
+                if self._product_files_dialog is not None:
+                    if action == "save_product_file":
+                        self._product_files_dialog.set_save_result(error=error)
+                    else:
+                        self._product_files_dialog.meta.setText(f"Ошибка чтения склада: {error}")
             elif action == "update_automation_settings":
                 self.automation_status.setText(f"Не удалось сохранить автоматизации: {error}")
             elif action == "send_image":
@@ -898,6 +1063,20 @@ class DesktopWindow(QMainWindow):
             self._add_activity(
                 f"Правила {config.get('file', 'Vertex')} проверены и сохранены; "
                 f"разделов: {config.get('sections', 0)}"
+            )
+        elif action == "get_product_files":
+            if self._product_files_dialog is not None:
+                self._product_files_dialog.set_files(data.get("files", []))
+        elif action == "get_product_file":
+            if self._product_files_dialog is not None:
+                self._product_files_dialog.set_file(data)
+        elif action == "save_product_file":
+            if self._product_files_dialog is not None:
+                self._product_files_dialog.set_save_result(data)
+            file_info = data.get("file", {})
+            self._add_activity(
+                f"Файл товаров {file_info.get('name', '')} сохранён: "
+                f"{file_info.get('products', 0)} товаров"
             )
         elif action == "update_automation_settings":
             self.automation_status.setText("Настройки автоматизаций сохранены.")
@@ -1493,6 +1672,51 @@ class DesktopWindow(QMainWindow):
         self._open_rule_config_editor(
             "auto_delivery", "Редактор правил автовыдачи", "auto_delivery.cfg"
         )
+
+    def _open_product_files_dialog(self) -> None:
+        if self.engine_process.state() != QProcess.ProcessState.Running:
+            QMessageBox.information(
+                self, "Движок не запущен", "Подключи Vertex, чтобы открыть локальный склад товаров."
+            )
+            return
+        if self._product_files_dialog is not None:
+            self._product_files_dialog.show()
+            self._product_files_dialog.raise_()
+            self._product_files_dialog.activateWindow()
+            return
+        dialog = ProductFilesDialog(self._read_product_file, self._save_product_file, self)
+        self._product_files_dialog = dialog
+        dialog.finished.connect(
+            lambda _result, current=dialog:
+                setattr(self, "_product_files_dialog", None)
+                if self._product_files_dialog is current else None
+        )
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+        self._send_command("get_product_files")
+
+    def _read_product_file(self, filename: str | None) -> None:
+        if filename is None:
+            self._send_command("get_product_files")
+        else:
+            self._send_command("get_product_file", filename=filename)
+
+    def _save_product_file(self, filename: str, content: str) -> bool:
+        if self.engine_process.state() != QProcess.ProcessState.Running:
+            QMessageBox.information(self, "Движок не запущен", "Подключи Vertex перед сохранением файла.")
+            return False
+        answer = QMessageBox.warning(
+            self, "Сохранить файл товаров?",
+            f"Записать «{filename}» в storage/products? Предыдущая версия будет сохранена в резервную копию. "
+            "При включённой автовыдаче изменения повлияют на следующие заказы.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return False
+        self._send_command("save_product_file", filename=filename, content=content)
+        return True
 
     def _export_table_csv(self, table: QTableWidget, default_name: str) -> None:
         path, _ = QFileDialog.getSaveFileName(
