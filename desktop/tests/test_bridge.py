@@ -1,9 +1,11 @@
+import configparser
 import unittest
 from datetime import date, datetime
 from types import SimpleNamespace
 
 from desktop.engine_runner import (
-    _collect_sales, _currency_editor_payload, _order_analytics, _refresh_profile,
+    _collect_sales, _currency_editor_payload, _get_desktop_preferences,
+    _order_analytics, _refresh_profile,
     _serialize_create_categories,
     serialize_chat, serialize_lot,
     serialize_message, serialize_order,
@@ -118,6 +120,22 @@ class DesktopBridgeSerializationTests(unittest.TestCase):
         self.assertEqual(result["amount"], 9)
         self.assertFalse(result["active"])
         self.assertTrue(result["is_currency"])
+
+
+    def test_preferences_only_expose_keys_already_in_config(self):
+        config = configparser.ConfigParser()
+        config.read_string(
+            "[FunPay]\\nautoRestore = true\\nkeepSentMessagesUnread = false\\n"
+            "[NewMessageView]\\nshowImageName = true\\n"
+        )
+        self.assertEqual(
+            _get_desktop_preferences(config),
+            {
+                "FunPay.autoRestore": True,
+                "FunPay.keepSentMessagesUnread": False,
+                "NewMessageView.showImageName": True,
+            },
+        )
 
     def test_order_analytics_groups_by_date_and_counts_statuses(self):
         orders = [
