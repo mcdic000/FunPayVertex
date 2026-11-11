@@ -52,11 +52,15 @@ def _register_desktop_events(vertex: Any) -> None:
     }
 
     for binding_name, title in bindings.items():
-        def handler(_vertex: Any, event: Any, event_title: str = title) -> None:
+        def handler(_vertex: Any, *event_data: Any, event_title: str = title) -> None:
+            # Vertex hook families do not all use the same callback signature:
+            # event hooks pass (vertex, event), while lots-raise hooks pass
+            # (vertex, category, message). We intentionally expose no payload.
+            first = event_data[0] if event_data else None
             emit({
                 "type": "activity",
                 "title": event_title,
-                "event": type(event).__name__,
+                "event": type(first).__name__ if first is not None else "VertexHook",
             })
 
         setattr(module, binding_name, [handler])
