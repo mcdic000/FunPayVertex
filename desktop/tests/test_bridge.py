@@ -126,8 +126,8 @@ class DesktopBridgeSerializationTests(unittest.TestCase):
         config = configparser.ConfigParser()
         config.optionxform = str
         config.read_string(
-            "[FunPay]\\nautoRestore = true\\nkeepSentMessagesUnread = false\\n"
-            "[NewMessageView]\\nshowImageName = true\\n"
+            "[FunPay]\nautoRestore = true\nkeepSentMessagesUnread = false\n"
+            "[NewMessageView]\nshowImageName = true\n"
         )
         self.assertEqual(
             _get_desktop_preferences(config),
