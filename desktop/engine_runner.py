@@ -163,11 +163,10 @@ def _refresh_profile(vertex: Any) -> list[dict[str, Any]]:
             }
 
     vertex.desktop_lots = lots_by_id
+    # Keep Vertex's own ID cache exactly aligned with its public UserProfile.
+    # Paused/private listings belong only to the desktop cache.
     if hasattr(vertex, "lots_ids"):
-        vertex.lots_ids = [
-            int(lot_id) if lot_id.isdecimal() else lot_id
-            for lot_id in lots_by_id
-        ]
+        vertex.lots_ids = [lot.id for lot in profile.get_lots()]
     return list(lots_by_id.values())
 
 
