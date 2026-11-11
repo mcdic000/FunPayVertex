@@ -833,8 +833,9 @@ def _command_loop(vertex: Any) -> None:
             emit({"type": "protocol_error", "message": "Некорректная команда desktop-клиента"})
 
 
-def main() -> int:
-    root = Path(__file__).resolve().parents[1]
+def main(root: Path | None = None, start_command_loop: bool = True) -> int:
+    """Start the bridge; injectable root/command-loop switch keep lifecycle tests offline."""
+    root = Path(root).resolve() if root is not None else Path(__file__).resolve().parents[1]
     sys.path.insert(0, str(root))
     _prepare_working_tree(root)
 
@@ -867,8 +868,9 @@ def main() -> int:
               "account_id": getattr(vertex.account, "id", None),
               "lots_count": lots_count})
 
-        threading.Thread(target=_command_loop, args=(vertex,), daemon=True,
-                         name="desktop-command-loop").start()
+        if start_command_loop:
+            threading.Thread(target=_command_loop, args=(vertex,), daemon=True,
+                             name="desktop-command-loop").start()
         vertex.run()
         emit({"type": "engine_stopped"})
         return 0
