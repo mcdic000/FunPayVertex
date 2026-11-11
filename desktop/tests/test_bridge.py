@@ -792,7 +792,7 @@ class DesktopBridgeSerializationTests(unittest.TestCase):
 
             self.assertEqual(result["sections"], 1)
             self.assertEqual(target.read_text(encoding="utf-8"), content)
-            self.assertEqual(vertex.AR_CFG.sections(), ["sell", "buy"])
+            self.assertEqual(vertex.AR_CFG.sections(), ["sell|buy", "sell", "buy"])
             self.assertEqual(vertex.RAW_AR_CFG.sections(), ["sell|buy"])
             self.assertTrue((root / result["backup"]).is_file())
             self.assertEqual(
@@ -889,6 +889,71 @@ class DesktopBridgeSerializationTests(unittest.TestCase):
             self.assertEqual(vertex.AD_CFG.sections(), ["lot"])
             self.assertTrue((root / result["backup"]).is_file())
 
+
+    def test_rule_config_save_runs_real_vertex_config_validators(self):
+        from Utils.config_loader import (
+            load_auto_delivery_config, load_auto_response_config,
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "configs").mkdir()
+            products_dir = root / "storage" / "products"
+            products_dir.mkdir(parents=True)
+            response_target = root / "configs" / "auto_response.cfg"
+            delivery_target = root / "configs" / "auto_delivery.cfg"
+            response_target.write_text(
+                "[old]\\nresponse: Original\\n", encoding="utf-8"
+            )
+            delivery_target.write_text(
+                "[old]\\nresponse: Original $product\\n", encoding="utf-8"
+            )
+            vertex = SimpleNamespace(AR_CFG=None, RAW_AR_CFG=None, AD_CFG=None)
+            response_text = (
+                "[sell|buy]\\nresponse: Hello $buyer\\n"
+                "telegramNotification: 0\\n"
+            )
+            delivery_text = (
+                "[stock offer]\\nresponse: Here is $product\\n"
+                "productsFileName: stock.txt\\n"
+            )
+            old_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                response_result = _save_rule_config(
+                    vertex, root, "auto_response", response_text
+                )
+                self.assertEqual(
+                    vertex.AR_CFG.sections(), ["sell|buy", "sell", "buy"]
+                )
+                self.assertEqual(vertex.RAW_AR_CFG.sections(), ["sell|buy"])
+                self.assertEqual(
+                    load_auto_response_config(str(response_target)).sections(),
+                    ["sell|buy", "sell", "buy"],
+                )
+
+                with self.assertRaises(Exception):
+                    _save_rule_config(vertex, root, "auto_delivery", delivery_text)
+                self.assertEqual(
+                    delivery_target.read_text(encoding="utf-8"),
+                    "[old]\\nresponse: Original $product\\n",
+                )
+                (products_dir / "stock.txt").write_text("item-1\\n", encoding="utf-8")
+                delivery_result = _save_rule_config(
+                    vertex, root, "auto_delivery", delivery_text
+                )
+                self.assertEqual(vertex.AD_CFG.sections(), ["stock offer"])
+                self.assertEqual(
+                    load_auto_delivery_config(str(delivery_target)).sections(),
+                    ["stock offer"],
+                )
+            finally:
+                os.chdir(old_cwd)
+
+            self.assertTrue((root / response_result["backup"]).is_file())
+            self.assertTrue((root / delivery_result["backup"]).is_file())
+            self.assertEqual(response_result["sections"], 1)
+            self.assertEqual(delivery_result["sections"], 1)
 
     def test_message_serializes_text_and_author(self):
         message = SimpleNamespace(
