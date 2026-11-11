@@ -522,7 +522,6 @@ def _handle_command(vertex: Any, command: dict[str, Any]) -> dict[str, Any]:
     account = vertex.account
 
     if action == "shutdown":
-        vertex.stop()
         return {"stopping": True}
 
     if action == "get_orders":
@@ -907,6 +906,10 @@ def _command_loop(vertex: Any) -> None:
                 result = _handle_command(vertex, command)
                 emit({"type": "response", "request_id": request_id,
                       "action": command.get("action"), "ok": True, "data": result})
+                if command.get("action") == "shutdown":
+                    # Acknowledge the GUI before releasing Vertex's run loop.
+                    vertex.stop()
+                    break
             except Exception as exc:
                 emit({"type": "response", "request_id": request_id,
                       "action": command.get("action"), "ok": False,
