@@ -368,7 +368,7 @@ class DesktopWindow(QMainWindow):
         elif kind == "message_event":
             self._add_activity(f"Новое сообщение: {message.get('chat_name') or 'чат'}")
             if str(message.get("chat_id")) == self._selected_chat_id:
-                self._send_command("get_chat_history", chat_id=self._selected_chat_id)
+                self._append_message(message.get("message", {}))
         elif kind == "response":
             self._handle_response(message)
 
@@ -405,10 +405,25 @@ class DesktopWindow(QMainWindow):
         self.orders_summary.setText(f"Загружено заказов: {len(orders)}")
 
     def _upsert_order(self, order: dict) -> None:
-        # The event carries only a shortcut snapshot. Refresh the canonical
-        # sales list rather than merging partial fields into formatted table data.
-        if order.get("id"):
-            self._send_command("get_orders")
+        order_id = str(order.get("id", ""))
+        if not order_id:
+            return
+        target_row = None
+        for row in range(self.order_table.rowCount()):
+            item = self.order_table.item(row, 0)
+            if item and item.text() == order_id:
+                target_row = row
+                break
+        if target_row is None:
+            target_row = 0
+            self.order_table.insertRow(target_row)
+        price = order.get("price")
+        price_text = f"{price} {order.get('currency', '')}".strip() if price is not None else ""
+        values = [order_id, order.get("buyer", ""), order.get("description", ""),
+                  price_text, order.get("status", ""), order.get("date", "")]
+        for column, value in enumerate(values):
+            self.order_table.setItem(target_row, column, QTableWidgetItem(str(value)))
+        self.orders_summary.setText(f"Заказов в списке: {self.order_table.rowCount()}")
 
     def _set_chats(self, chats: list[dict]) -> None:
         selected = self._selected_chat_id
@@ -449,12 +464,22 @@ class DesktopWindow(QMainWindow):
     def _set_messages(self, messages: list[dict]) -> None:
         self.message_list.clear()
         for message in messages:
-            author = message.get("author") or "Система"
-            body = message.get("text") or (f"[Изображение] {message.get('image')}" if message.get("image") else "[Без текста]")
-            label = f"{author}: {body}"
-            item = QListWidgetItem(label)
-            item.setToolTip(label)
-            self.message_list.addItem(item)
+            self._append_message(message)
+
+    def _append_message(self, message: dict) -> None:
+        message_id = str(message.get("id", ""))
+        if message_id:
+            for index in range(self.message_list.count()):
+                existing = self.message_list.item(index)
+                if existing.data(Qt.ItemDataRole.UserRole) == message_id:
+                    return
+        author = message.get("author") or "Система"
+        body = message.get("text") or (f"[Изображение] {message.get('image')}" if message.get("image") else "[Без текста]")
+        label = f"{author}: {body}"
+        item = QListWidgetItem(label)
+        item.setData(Qt.ItemDataRole.UserRole, message_id)
+        item.setToolTip(label)
+        self.message_list.addItem(item)
         self.message_list.scrollToBottom()
 
     def _send_chat_message(self) -> None:
