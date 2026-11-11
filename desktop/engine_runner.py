@@ -37,7 +37,7 @@ def serialize_order(order: Any) -> dict[str, Any]:
         "id": str(getattr(order, "id", "")),
         "buyer": getattr(order, "buyer_username", None) or "",
         "description": getattr(order, "description", None) or "",
-        "price": getattr(order, "price", None),
+        "price": getattr(order, "price", getattr(order, "sum", None)),
         "currency": _value(getattr(order, "currency", None)),
         "status": _value(getattr(order, "status", None)),
         "date": order_date_text,
@@ -189,6 +189,43 @@ def _get_desktop_preferences(config: Any) -> dict[str, bool]:
     return result
 
 
+def _collect_sales(account: Any, max_pages: int = 10) -> tuple[list[Any], bool]:
+    """Collect a bounded, deduplicated window of recent sales using Vertex pagination."""
+    next_id, page, locale, _subcategories = account.get_sales(
+        include_paid=True, include_closed=True, include_refunded=True
+    )
+    orders = list(page)
+    seen_ids = {str(getattr(order, "id", "")) for order in orders}
+    pages = 1
+    has_more = bool(next_id)
+
+    while next_id and pages < max_pages:
+        cursor = str(next_id)
+        next_cursor, page, _locale, _subcategories = account.get_sales(
+            start_from=cursor,
+            include_paid=True,
+            include_closed=True,
+            include_refunded=True,
+            locale=locale,
+        )
+        pages += 1
+        if not page:
+            has_more = False
+            break
+        for order in page:
+            order_id = str(getattr(order, "id", ""))
+            if not order_id or order_id not in seen_ids:
+                orders.append(order)
+                if order_id:
+                    seen_ids.add(order_id)
+        if next_cursor == next_id:
+            has_more = True
+            break
+        next_id = next_cursor
+        has_more = bool(next_id)
+
+    return orders, has_more
+
 def _order_analytics(orders: list[Any]) -> dict[str, Any]:
     from collections import defaultdict
 
@@ -199,6 +236,8 @@ def _order_analytics(orders: list[Any]) -> dict[str, Any]:
         status = _value(getattr(order, "status", None)).upper() or "UNKNOWN"
         counts[status] += 1
         raw_price = getattr(order, "price", None)
+        if raw_price is None:
+            raw_price = getattr(order, "sum", None)
         try:
             price = float(raw_price) if raw_price is not None else 0.0
         except (TypeError, ValueError):
@@ -450,10 +489,11 @@ def _handle_command(vertex: Any, command: dict[str, Any]) -> dict[str, Any]:
         return {"lots": lots, "count": len(lots), "deleted_lot_id": lot_id}
 
     if action == "get_analytics":
-        _next, orders, _locale, _subcategories = account.get_sales(
-            include_paid=True, include_closed=True, include_refunded=True
-        )
-        return {"analytics": _order_analytics(list(orders))}
+        orders, has_more = _collect_sales(account, max_pages=10)
+        analytics = _order_analytics(orders)
+        analytics["sampled_sales"] = len(orders)
+        analytics["has_more"] = has_more
+        return {"analytics": analytics}
 
     if action == "get_preferences":
         return {"preferences": _get_desktop_preferences(vertex.MAIN_CFG)}
