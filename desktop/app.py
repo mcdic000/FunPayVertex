@@ -6,12 +6,14 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QProcess, QProcessEnvironment, QTimer, Qt
+from PySide6.QtCore import QProcess, QProcessEnvironment, QTimer, Qt, QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
-    QAbstractItemView, QApplication, QCheckBox, QFrame, QHBoxLayout, QHeaderView,
-    QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox,
-    QPushButton, QStackedWidget, QTableWidget, QTableWidgetItem, QTextEdit,
-    QVBoxLayout, QWidget,
+    QAbstractItemView, QApplication, QCheckBox, QDialog, QDialogButtonBox,
+    QDoubleSpinBox, QFormLayout, QFrame, QHBoxLayout, QHeaderView, QLabel,
+    QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox,
+    QPushButton, QSpinBox, QStackedWidget, QTableWidget, QTableWidgetItem,
+    QTextEdit, QVBoxLayout, QWidget,
 )
 
 
@@ -36,6 +38,10 @@ class DesktopWindow(QMainWindow):
         self._request_counter = 0
         self._selected_chat_id: str | None = None
         self._chats: dict[str, dict] = {}
+        self._lots: dict[str, dict] = {}
+        self._activity_history: list[tuple[str, str]] = []
+        self.preference_checks: dict[str, QCheckBox] = {}
+        self._analytics_loaded = False
 
         self.setWindowTitle("FunPay Assistant")
         self.resize(1180, 760)
@@ -225,42 +231,220 @@ class DesktopWindow(QMainWindow):
         messages_layout.addWidget(conversation_panel, 1)
         self.pages.addWidget(messages_page)
 
-        # Global automation switches
-        for title, description in self.PAGES[3:]:
-            page = QWidget()
-            page_layout = QVBoxLayout(page)
-            page_layout.setContentsMargins(0, 8, 0, 0)
-            panel, box = self._panel(title, description)
-            if title == "Автовыдача":
-                note = QLabel(
-                    "Эти переключатели управляют автоматизациями существующего Vertex. "
-                    "Перед включением проверь правила автовыдачи и автоответов в конфигурации."
-                )
-                note.setObjectName("notice")
-                note.setWordWrap(True)
-                box.addWidget(note)
-                self.auto_delivery_check = QCheckBox("Автоматическая выдача товаров")
-                self.auto_response_check = QCheckBox("Автоматические ответы в чатах")
-                self.auto_raise_check = QCheckBox("Автоматическое поднятие лотов")
-                for checkbox in (self.auto_delivery_check, self.auto_response_check, self.auto_raise_check):
-                    checkbox.setObjectName("automationCheck")
-                    box.addWidget(checkbox)
-                save_automations = QPushButton("Сохранить настройки")
-                save_automations.setObjectName("primaryButton")
-                save_automations.clicked.connect(self._save_automation_settings)
-                box.addWidget(save_automations)
-                self.automation_status = QLabel("Подключи аккаунт, чтобы загрузить настройки.")
-                self.automation_status.setObjectName("muted")
-                box.addWidget(self.automation_status)
-                box.addStretch(1)
-            else:
-                note = QLabel("Этот раздел подключим следующим этапом. Пока здесь нет рабочих настроек.")
-                note.setObjectName("notice")
-                note.setWordWrap(True)
-                box.addWidget(note)
-                box.addStretch(1)
-            page_layout.addWidget(panel, 1)
-            self.pages.addWidget(page)
+        # Automation controls
+        automation_page = QWidget()
+        automation_layout = QVBoxLayout(automation_page)
+        automation_layout.setContentsMargins(0, 8, 0, 0)
+        automation_panel, automation_box = self._panel(
+            "Автоматизации Vertex",
+            "Переключатели управляют существующими функциями Vertex. Правила выдачи и автоответов "
+            "по-прежнему хранятся в локальных конфигурационных файлах."
+        )
+        automation_note = QLabel(
+            "Перед включением проверь шаблоны и товары в configs/auto_delivery.cfg и "
+            "configs/auto_response.cfg. Автоматизации начнут выполнять действия в аккаунте сразу "
+            "после запуска движка."
+        )
+        automation_note.setObjectName("notice")
+        automation_note.setWordWrap(True)
+        automation_box.addWidget(automation_note)
+        self.auto_delivery_check = QCheckBox("Автоматическая выдача товаров")
+        self.auto_response_check = QCheckBox("Автоматические ответы в чатах")
+        self.auto_raise_check = QCheckBox("Автоматическое поднятие лотов")
+        for checkbox in (self.auto_delivery_check, self.auto_response_check, self.auto_raise_check):
+            checkbox.setObjectName("automationCheck")
+            automation_box.addWidget(checkbox)
+        save_automations = QPushButton("Сохранить настройки")
+        save_automations.setObjectName("primaryButton")
+        save_automations.clicked.connect(self._save_automation_settings)
+        automation_box.addWidget(save_automations)
+        self.automation_status = QLabel("Подключи аккаунт, чтобы загрузить настройки.")
+        self.automation_status.setObjectName("muted")
+        automation_box.addWidget(self.automation_status)
+        automation_box.addStretch(1)
+        automation_layout.addWidget(automation_panel, 1)
+        self.pages.addWidget(automation_page)
+
+        # Lot management
+        lots_page = QWidget()
+        lots_layout = QVBoxLayout(lots_page)
+        lots_layout.setContentsMargins(0, 8, 0, 0)
+        lots_panel, lots_box = self._panel(
+            "Мои лоты",
+            "Загружаются из профиля FunPay. Обычные и валютные предложения показываются отдельно по типу."
+        )
+        lots_toolbar = QHBoxLayout()
+        self.lot_search = QLineEdit()
+        self.lot_search.setPlaceholderText("Поиск по ID, названию, категории или серверу...")
+        self.lot_search.textChanged.connect(self._filter_lots)
+        lots_toolbar.addWidget(self.lot_search, 1)
+        self.lots_summary = QLabel("Лоты ещё не загружены")
+        self.lots_summary.setObjectName("muted")
+        lots_toolbar.addWidget(self.lots_summary)
+        refresh_lots = QPushButton("Обновить")
+        refresh_lots.clicked.connect(lambda: self._send_command("get_lots"))
+        lots_toolbar.addWidget(refresh_lots)
+        lots_box.addLayout(lots_toolbar)
+        self.lot_table = QTableWidget(0, 8)
+        self.lot_table.setHorizontalHeaderLabels(
+            ["ID", "Категория", "Название", "Сервер / сторона", "Кол-во", "Цена", "Тип", "Статус"]
+        )
+        self.lot_table.setObjectName("dataTable")
+        self.lot_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.lot_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.lot_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.lot_table.verticalHeader().setVisible(False)
+        self.lot_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        for column in (0, 1, 3, 4, 5, 6, 7):
+            self.lot_table.horizontalHeader().setSectionResizeMode(
+                column, QHeaderView.ResizeMode.ResizeToContents
+            )
+        lots_box.addWidget(self.lot_table, 1)
+        lot_actions = QHBoxLayout()
+        edit_lot_button = QPushButton("Изменить выбранный")
+        edit_lot_button.setObjectName("primaryButton")
+        edit_lot_button.clicked.connect(self._edit_selected_lot)
+        lot_actions.addWidget(edit_lot_button)
+        delete_lot_button = QPushButton("Удалить обычный лот")
+        delete_lot_button.clicked.connect(self._delete_selected_lot)
+        lot_actions.addWidget(delete_lot_button)
+        open_lot_button = QPushButton("Открыть на FunPay")
+        open_lot_button.clicked.connect(self._open_selected_lot)
+        lot_actions.addWidget(open_lot_button)
+        lot_actions.addStretch(1)
+        lots_box.addLayout(lot_actions)
+        self.lot_status = QLabel("Изменения отправляются напрямую через API Vertex.")
+        self.lot_status.setObjectName("muted")
+        lots_box.addWidget(self.lot_status)
+        lots_layout.addWidget(lots_panel, 1)
+        self.pages.addWidget(lots_page)
+
+        # Analytics
+        analytics_page = QWidget()
+        analytics_layout = QVBoxLayout(analytics_page)
+        analytics_layout.setContentsMargins(0, 8, 0, 0)
+        analytics_panel, analytics_box = self._panel(
+            "Статистика продаж",
+            "Показатели рассчитываются по истории продаж, которую возвращает FunPay для подключённого аккаунта."
+        )
+        analytics_toolbar = QHBoxLayout()
+        self.analytics_summary = QLabel("Статистика ещё не загружена")
+        self.analytics_summary.setObjectName("notice")
+        self.analytics_summary.setWordWrap(True)
+        analytics_toolbar.addWidget(self.analytics_summary, 1)
+        refresh_analytics = QPushButton("Пересчитать")
+        refresh_analytics.clicked.connect(lambda: self._send_command("get_analytics"))
+        analytics_toolbar.addWidget(refresh_analytics)
+        analytics_box.addLayout(analytics_toolbar)
+        self.analytics_table = QTableWidget(0, 3)
+        self.analytics_table.setHorizontalHeaderLabels(["Дата", "Заказов", "Сумма"])
+        self.analytics_table.setObjectName("dataTable")
+        self.analytics_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.analytics_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.analytics_table.verticalHeader().setVisible(False)
+        self.analytics_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.analytics_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.analytics_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        analytics_box.addWidget(self.analytics_table, 1)
+        self.analytics_note = QLabel(
+            "Сумма — сумма цен в полученной выборке заказов; она не заменяет баланс FunPay "
+            "и не является расчётом чистой прибыли."
+        )
+        self.analytics_note.setObjectName("muted")
+        self.analytics_note.setWordWrap(True)
+        analytics_box.addWidget(self.analytics_note)
+        analytics_layout.addWidget(analytics_panel, 1)
+        self.pages.addWidget(analytics_page)
+
+        # Notifications and activity
+        notifications_page = QWidget()
+        notifications_layout = QVBoxLayout(notifications_page)
+        notifications_layout.setContentsMargins(0, 8, 0, 0)
+        notifications_panel, notifications_box = self._panel(
+            "Журнал событий",
+            "Здесь отображаются новые заказы, сообщения, ошибки и другие события текущего сеанса."
+        )
+        notifications_toolbar = QHBoxLayout()
+        self.notifications_summary = QLabel("Событий пока нет")
+        self.notifications_summary.setObjectName("muted")
+        notifications_toolbar.addWidget(self.notifications_summary)
+        notifications_toolbar.addStretch(1)
+        clear_notifications = QPushButton("Очистить журнал")
+        clear_notifications.clicked.connect(self._clear_notifications)
+        notifications_toolbar.addWidget(clear_notifications)
+        notifications_box.addLayout(notifications_toolbar)
+        self.notifications_list = QListWidget()
+        self.notifications_list.setObjectName("activityList")
+        notifications_box.addWidget(self.notifications_list, 1)
+        notifications_layout.addWidget(notifications_panel, 1)
+        self.pages.addWidget(notifications_page)
+
+        # Additional local Vertex preferences
+        settings_page = QWidget()
+        settings_layout = QVBoxLayout(settings_page)
+        settings_layout.setContentsMargins(0, 8, 0, 0)
+        settings_panel, settings_box = self._panel(
+            "Настройки Vertex",
+            "Безопасные переключатели из локального configs/_main.cfg. Секреты и токены приложение не показывает."
+        )
+        settings_note = QLabel(
+            "Изменение некоторых параметров влияет на уведомления, обработку сообщений и поведение бота. "
+            "Не меняй настройки, смысл которых тебе неизвестен."
+        )
+        settings_note.setObjectName("notice")
+        settings_note.setWordWrap(True)
+        settings_box.addWidget(settings_note)
+        preference_labels = {
+            "FunPay.multiDelivery": "Множественная выдача",
+            "FunPay.autoRestore": "Восстанавливать лоты после продажи",
+            "FunPay.autoDisable": "Автоматически отключать лоты",
+            "FunPay.oldMsgGetMode": "Использовать старый режим получения сообщений",
+            "FunPay.keepSentMessagesUnread": "Оставлять отправленные сообщения непрочитанными",
+            "Greetings.ignoreSystemMessages": "Игнорировать системные сообщения приветствиями",
+            "Greetings.onlyNewChats": "Приветствовать только новые чаты",
+            "Greetings.sendGreetings": "Отправлять приветствия",
+            "BlockList.blockDelivery": "Блокировать автовыдачу",
+            "BlockList.blockResponse": "Блокировать автоответы",
+            "BlockList.blockNewMessageNotification": "Не уведомлять о новых сообщениях",
+            "BlockList.blockNewOrderNotification": "Не уведомлять о новых заказах",
+            "BlockList.blockCommandNotification": "Не уведомлять о командах",
+            "NewMessageView.includeMyMessages": "Учитывать мои сообщения",
+            "NewMessageView.includeFPMessages": "Учитывать сообщения FunPay",
+            "NewMessageView.includeBotMessages": "Учитывать сообщения ботов",
+            "NewMessageView.notifyOnlyMyMessages": "Уведомлять только о моих сообщениях",
+            "NewMessageView.notifyOnlyFPMessages": "Уведомлять только о системных сообщениях FunPay",
+            "NewMessageView.notifyOnlyBotMessages": "Уведомлять только о сообщениях ботов",
+            "NewMessageView.showImageName": "Показывать имя изображения",
+        }
+        section_title = None
+        for key, label_text in preference_labels.items():
+            section_name = key.split(".", 1)[0]
+            if section_name != section_title:
+                section_title = section_name
+                heading = QLabel(section_name)
+                heading.setObjectName("sectionTitle")
+                settings_box.addWidget(heading)
+            checkbox = QCheckBox(label_text)
+            checkbox.setObjectName("automationCheck")
+            self.preference_checks[key] = checkbox
+            settings_box.addWidget(checkbox)
+        preference_actions = QHBoxLayout()
+        save_preferences = QPushButton("Сохранить дополнительные настройки")
+        save_preferences.setObjectName("primaryButton")
+        save_preferences.clicked.connect(self._save_preferences)
+        preference_actions.addWidget(save_preferences)
+        open_config_folder = QPushButton("Открыть папку configs")
+        open_config_folder.clicked.connect(
+            lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.project_root / "configs")))
+        )
+        preference_actions.addWidget(open_config_folder)
+        preference_actions.addStretch(1)
+        settings_box.addLayout(preference_actions)
+        self.preferences_status = QLabel("Подключи аккаунт, чтобы загрузить параметры.")
+        self.preferences_status.setObjectName("muted")
+        settings_box.addWidget(self.preferences_status)
+        settings_layout.addWidget(settings_panel, 1)
+        self.pages.addWidget(settings_page)
 
     def _change_title(self, index: int) -> None:
         if 0 <= index < len(self.PAGES):
@@ -271,8 +455,15 @@ class DesktopWindow(QMainWindow):
             elif index == 2 and self.engine_process.state() == QProcess.ProcessState.Running:
                 if not self._chats:
                     self._send_command("get_chats")
-            elif index == 3 and self.engine_process.state() == QProcess.ProcessState.Running:
-                self._send_command("get_settings")
+            elif self.engine_process.state() == QProcess.ProcessState.Running:
+                if index == 3:
+                    self._send_command("get_settings")
+                elif index == 4 and not self._lots:
+                    self._send_command("get_lots")
+                elif index == 5 and not self._analytics_loaded:
+                    self._send_command("get_analytics")
+                elif index == 7:
+                    self._send_command("get_preferences")
 
     def _toggle_engine(self) -> None:
         if self.engine_process.state() != QProcess.ProcessState.NotRunning:
@@ -376,7 +567,13 @@ class DesktopWindow(QMainWindow):
             self._add_activity(f"Подключён аккаунт {username}")
             self._send_command("get_orders")
             self._send_command("get_chats")
+            self._send_command("get_lots")
+            self._send_command("get_analytics")
+            self._send_command("get_preferences")
             self._send_command("get_settings")
+            self._send_command("get_lots")
+            self._send_command("get_analytics")
+            self._send_command("get_preferences")
         elif kind == "setup_required":
             self.connection_badge.setText("● Нужна настройка")
             self.engine_details.setText(message.get("message", "Сначала настрой Vertex."))
@@ -391,6 +588,8 @@ class DesktopWindow(QMainWindow):
                 self._send_command("get_orders")
             elif message.get("target") == "chats":
                 self._send_command("get_chats")
+            elif message.get("target") == "analytics":
+                self._send_command("get_analytics")
         elif kind == "order_event":
             self._add_activity(f"{message.get('event', 'Заказ')}: #{message.get('order', {}).get('id', '')}")
             self._upsert_order(message.get("order", {}))
@@ -421,6 +620,23 @@ class DesktopWindow(QMainWindow):
             self.auto_response_check.setChecked(bool(data.get("auto_response")))
             self.auto_raise_check.setChecked(bool(data.get("auto_raise")))
             self.automation_status.setText("Настройки загружены из configs/_main.cfg")
+        elif action == "get_lots":
+            self._set_lots(data.get("lots", []))
+        elif action in ("update_lot", "delete_lot"):
+            self._set_lots(data.get("lots", []))
+            self.lot_status.setText(
+                f"Лот #{data.get('saved_lot_id') or data.get('deleted_lot_id')} успешно обновлён."
+                if action == "update_lot" else "Лот удалён."
+            )
+            self._add_activity(self.lot_status.text())
+        elif action == "get_analytics":
+            self._render_analytics(data.get("analytics", {}))
+        elif action == "get_preferences":
+            self._set_preferences(data.get("preferences", {}))
+        elif action == "update_preferences":
+            self._set_preferences(data.get("preferences", {}))
+            self.preferences_status.setText("Дополнительные настройки сохранены.")
+            self._add_activity("Настройки Vertex сохранены")
         elif action == "update_automation_settings":
             self.automation_status.setText("Настройки автоматизаций сохранены.")
             self._add_activity("Настройки автоматизаций сохранены")
@@ -444,6 +660,229 @@ class DesktopWindow(QMainWindow):
                     item.setData(Qt.ItemDataRole.UserRole, order.get("chat_id"))
                 self.order_table.setItem(row, column, item)
         self.orders_summary.setText(f"Загружено заказов: {len(orders)}")
+
+    def _set_lots(self, lots: list[dict]) -> None:
+        self._lots = {str(lot.get("id")): lot for lot in lots if lot.get("id") is not None}
+        self.lot_table.setRowCount(len(self._lots))
+        for row, (lot_id, lot) in enumerate(self._lots.items()):
+            location = " / ".join(part for part in (lot.get("server", ""), lot.get("side", "")) if part)
+            amount = "∞" if lot.get("amount") is None else str(lot.get("amount"))
+            price = lot.get("price")
+            price_text = f"{price} {lot.get('currency', '')}".strip() if price is not None else ""
+            lot_type = "Валюта" if lot.get("subcategory_type") == "CURRENCY" else "Обычный"
+            status = "Активен" if lot.get("active") else "Отключён"
+            if lot.get("auto"):
+                status += " · авто"
+            values = [
+                lot_id, lot.get("subcategory", ""), lot.get("title", ""), location,
+                amount, price_text, lot_type, status,
+            ]
+            for column, value in enumerate(values):
+                item = QTableWidgetItem(str(value))
+                if column == 0:
+                    item.setData(Qt.ItemDataRole.UserRole, lot)
+                self.lot_table.setItem(row, column, item)
+        self.lots_summary.setText(f"Лотов: {len(self._lots)}")
+        self._filter_lots(self.lot_search.text())
+
+    def _filter_lots(self, query: str) -> None:
+        needle = query.casefold().strip()
+        visible = 0
+        for row in range(self.lot_table.rowCount()):
+            values = [
+                self.lot_table.item(row, column).text()
+                if self.lot_table.item(row, column) else ""
+                for column in range(self.lot_table.columnCount())
+            ]
+            matches = not needle or needle in " ".join(values).casefold()
+            self.lot_table.setRowHidden(row, not matches)
+            visible += int(matches)
+        self.lots_summary.setText(
+            f"Показано: {visible} из {self.lot_table.rowCount()}"
+            if needle else f"Лотов: {self.lot_table.rowCount()}"
+        )
+
+    def _selected_lot(self) -> dict | None:
+        row = self.lot_table.currentRow()
+        if row < 0:
+            QMessageBox.information(self, "Лот не выбран", "Сначала выбери лот в таблице.")
+            return None
+        item = self.lot_table.item(row, 0)
+        lot = item.data(Qt.ItemDataRole.UserRole) if item else None
+        return lot if isinstance(lot, dict) else None
+
+    def _edit_selected_lot(self) -> None:
+        lot = self._selected_lot()
+        if not lot:
+            return
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"Изменение лота #{lot.get('id')}")
+        dialog.setMinimumWidth(520)
+        layout = QVBoxLayout(dialog)
+        form = QFormLayout()
+        is_currency = lot.get("subcategory_type") == "CURRENCY"
+
+        title_input = QLineEdit(str(lot.get("title") or ""))
+        title_input.setMaxLength(250)
+        form.addRow("Название", title_input)
+        description_input = QTextEdit()
+        description_input.setPlaceholderText("Подробное описание лота")
+        description_input.setMinimumHeight(115)
+        form.addRow("Описание", description_input)
+
+        price_input = QDoubleSpinBox()
+        price_input.setRange(0.01, 1000000000.0)
+        price_input.setDecimals(2)
+        price_input.setSingleStep(1.0)
+        try:
+            price_input.setValue(float(lot.get("price") or 0.01))
+        except (TypeError, ValueError):
+            price_input.setValue(0.01)
+        form.addRow("Цена", price_input)
+
+        amount_input = QSpinBox()
+        amount_input.setRange(0, 1000000000)
+        amount_input.setValue(int(lot.get("amount") or 0))
+        if lot.get("auto") and not is_currency:
+            amount_input.setEnabled(False)
+        form.addRow("Количество", amount_input)
+
+        active_input = QCheckBox("Лот активен и отображается покупателям")
+        active_input.setChecked(bool(lot.get("active")))
+        form.addRow("Статус", active_input)
+        layout.addLayout(form)
+
+        if is_currency:
+            title_input.setEnabled(False)
+            description_input.setEnabled(False)
+            note_text = (
+                "Валютные предложения редактируются через отдельную форму ChipFields. "
+                "Здесь доступны цена, количество и активность."
+            )
+        elif lot.get("auto"):
+            note_text = (
+                "У лота включена встроенная автовыдача FunPay. Количество карточек/товаров "
+                "зависит от списка секретов, поэтому поле количества заблокировано."
+            )
+        else:
+            note_text = "Будут изменены только указанные поля; остальные параметры лота сохраняются."
+        note = QLabel(note_text)
+        note.setObjectName("muted")
+        note.setWordWrap(True)
+        layout.addWidget(note)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        values = {
+            "price": price_input.value(),
+            "amount": amount_input.value(),
+            "active": active_input.isChecked(),
+        }
+        if not is_currency:
+            values["title"] = title_input.text().strip()
+            values["description"] = description_input.toPlainText()
+        answer = QMessageBox.question(
+            self, "Сохранить изменения?",
+            f"Сохранить изменения лота #{lot.get('id')} на FunPay?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self.lot_status.setText(f"Сохраняю лот #{lot.get('id')}...")
+        self._send_command("update_lot", lot_id=str(lot.get("id")), values=values)
+
+    def _delete_selected_lot(self) -> None:
+        lot = self._selected_lot()
+        if not lot:
+            return
+        if lot.get("subcategory_type") == "CURRENCY":
+            QMessageBox.information(
+                self, "Неподдерживаемая операция",
+                "Удаление валютных предложений через этот экран не поддерживается. "
+                "Их цену, количество и активность можно изменить.",
+            )
+            return
+        answer = QMessageBox.warning(
+            self, "Удалить лот?",
+            f"Лот #{lot.get('id')} будет удалён с FunPay. Это действие нельзя отменить.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer == QMessageBox.StandardButton.Yes:
+            self.lot_status.setText(f"Удаляю лот #{lot.get('id')}...")
+            self._send_command("delete_lot", lot_id=str(lot.get("id")))
+
+    def _open_selected_lot(self) -> None:
+        lot = self._selected_lot()
+        if not lot:
+            return
+        url = lot.get("public_link")
+        if url:
+            QDesktopServices.openUrl(QUrl(url))
+        else:
+            QMessageBox.information(self, "Ссылка недоступна", "Для этого лота не удалось получить ссылку.")
+
+    def _render_analytics(self, analytics: dict) -> None:
+        count = int(analytics.get("orders_count", 0) or 0)
+        gross = float(analytics.get("gross_total", 0) or 0)
+        statuses = analytics.get("status_counts", {})
+        status_text = ", ".join(
+            f"{key}: {value}" for key, value in sorted(statuses.items())
+        ) or "статусы не получены"
+        self.analytics_summary.setText(
+            f"Заказов: {count}  |  Сумма цен в выборке: {gross:,.2f}\n{status_text}"
+        )
+        daily = analytics.get("daily", [])
+        self.analytics_table.setRowCount(len(daily))
+        for row, item in enumerate(daily):
+            values = [
+                item.get("date", ""),
+                item.get("orders", 0),
+                f"{float(item.get('amount', 0) or 0):,.2f}",
+            ]
+            for column, value in enumerate(values):
+                self.analytics_table.setItem(row, column, QTableWidgetItem(str(value)))
+        self._analytics_loaded = True
+
+    def _set_preferences(self, preferences: dict) -> None:
+        for key, checkbox in self.preference_checks.items():
+            if key in preferences:
+                checkbox.setChecked(bool(preferences[key]))
+        self.preferences_status.setText("Параметры загружены из configs/_main.cfg")
+
+    def _save_preferences(self) -> None:
+        if self.engine_process.state() != QProcess.ProcessState.Running:
+            QMessageBox.information(
+                self, "Движок не запущен",
+                "Подключи аккаунт, чтобы менять настройки Vertex.",
+            )
+            return
+        preferences = {
+            key: checkbox.isChecked()
+            for key, checkbox in self.preference_checks.items()
+        }
+        answer = QMessageBox.question(
+            self, "Сохранить дополнительные настройки?",
+            "Настройки будут записаны в configs/_main.cfg. Некоторые параметры влияют "
+            "на обработку сообщений и автоматизаций Vertex.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer == QMessageBox.StandardButton.Yes:
+            self._send_command("update_preferences", preferences=preferences)
+
+    def _clear_notifications(self) -> None:
+        self._activity_history.clear()
+        self.notifications_list.clear()
+        self.notifications_summary.setText("Журнал очищен")
 
     def _save_automation_settings(self) -> None:
         if self.engine_process.state() != QProcess.ProcessState.Running:
@@ -611,9 +1050,17 @@ class DesktopWindow(QMainWindow):
 
     def _add_activity(self, text: str) -> None:
         timestamp = datetime.now().strftime("%H:%M:%S")
-        self.activity_list.insertItem(0, f"{timestamp}  ·  {text}")
+        entry = f"{timestamp}  ·  {text}"
+        self.activity_list.insertItem(0, entry)
         while self.activity_list.count() > 60:
             self.activity_list.takeItem(self.activity_list.count() - 1)
+        self._activity_history.insert(0, (timestamp, text))
+        self._activity_history = self._activity_history[:250]
+        if hasattr(self, "notifications_list"):
+            self.notifications_list.insertItem(0, entry)
+            while self.notifications_list.count() > 250:
+                self.notifications_list.takeItem(self.notifications_list.count() - 1)
+            self.notifications_summary.setText(f"Событий в этом сеансе: {len(self._activity_history)}")
 
     def closeEvent(self, event) -> None:
         self._closing = True
