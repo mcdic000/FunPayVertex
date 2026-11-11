@@ -83,8 +83,17 @@ def _currency_editor_payload(lot_data: dict[str, Any], chip_offer: Any) -> dict[
 def serialize_lot(lot: Any) -> dict[str, Any]:
     subcategory = getattr(lot, "subcategory", None)
     category = getattr(subcategory, "category", None)
+    lot_id = str(getattr(lot, "id", ""))
+    subcategory_id = getattr(subcategory, "id", None)
+    subcategory_type = _value(getattr(subcategory, "type", None)).upper()
+    if subcategory_type == "CURRENCY" and subcategory_id is not None:
+        edit_link = f"https://funpay.com/chips/{subcategory_id}/trade"
+    else:
+        edit_link = getattr(lot, "private_link", None) or (
+            f"https://funpay.com/lots/offerEdit?offer={lot_id}" if lot_id else ""
+        )
     return {
-        "id": str(getattr(lot, "id", "")),
+        "id": lot_id,
         "title": getattr(lot, "description", None) or getattr(lot, "title", None) or "",
         "server": getattr(lot, "server", None) or "",
         "side": getattr(lot, "side", None) or "",
@@ -98,11 +107,12 @@ def serialize_lot(lot: Any) -> dict[str, Any]:
             or getattr(subcategory, "name", None)
             or "Без категории"
         ),
-        "subcategory_id": getattr(subcategory, "id", None),
-        "subcategory_type": _value(getattr(subcategory, "type", None)).upper(),
+        "subcategory_id": subcategory_id,
+        "subcategory_type": subcategory_type,
         "category_id": getattr(category, "id", None),
         "category_name": getattr(category, "name", None) or "",
         "public_link": getattr(lot, "public_link", "") or "",
+        "edit_link": edit_link,
     }
 
 
@@ -172,6 +182,7 @@ def _refresh_profile(vertex: Any) -> list[dict[str, Any]]:
                 "category_name": getattr(getattr(subcategory, "category", None), "name", "") or "",
                 "public_link": current.get("public_link") or
                     f"https://funpay.com/chips/offer?id={lot_id}",
+                "edit_link": f"https://funpay.com/chips/{subcategory_id}/trade",
             }
 
     vertex.desktop_lots = lots_by_id
