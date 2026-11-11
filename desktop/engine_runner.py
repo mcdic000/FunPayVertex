@@ -4,7 +4,9 @@ from __future__ import annotations
 import json
 import math
 import os
+import shutil
 import sys
+import tempfile
 import threading
 from datetime import date, datetime
 from pathlib import Path
@@ -135,6 +137,80 @@ def _prepare_image_payload(image_path: str, max_bytes: int = 10 * 1024 * 1024) -
             "После преобразования PNG превышает 10 МБ. Уменьши изображение и попробуй снова."
         )
     return payload
+
+
+def _save_rule_config(vertex: Any, root: Path, name: str, content: str) -> dict[str, Any]:
+    """Validate, back up, atomically save, and hot-reload a Vertex rule config."""
+    files = {
+        "auto_response": "auto_response.cfg",
+        "auto_delivery": "auto_delivery.cfg",
+    }
+    if name not in files:
+        raise ValueError("Неизвестный тип правил")
+    if not isinstance(content, str):
+        raise ValueError("Содержимое конфигурации должно быть текстом")
+    if len(content.encode("utf-8")) > 1_000_000:
+        raise ValueError("Файл конфигурации слишком большой (максимум 1 МБ)")
+    if "\x00" in content:
+        raise ValueError("Конфигурация содержит недопустимый нулевой символ")
+
+    root = Path(root).resolve()
+    config_dir = root / "configs"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    target = config_dir / files[name]
+    temp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", newline="",
+            prefix=f".{target.name}.", suffix=".tmp",
+            dir=str(config_dir), delete=False,
+        ) as temporary:
+            temporary.write(content)
+            temporary.flush()
+            os.fsync(temporary.fileno())
+            temp_path = Path(temporary.name)
+
+        import Utils.config_loader as config_loader
+
+        if name == "auto_response":
+            normalized = config_loader.load_auto_response_config(str(temp_path))
+            raw = config_loader.load_raw_auto_response_config(str(temp_path))
+            section_count = len(raw.sections())
+        else:
+            normalized = config_loader.load_auto_delivery_config(str(temp_path))
+            raw = None
+            section_count = len(normalized.sections())
+
+        backup_path: Path | None = None
+        if target.is_file():
+            backup_dir = root / "storage" / "config_backups"
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            backup_path = backup_dir / f"{target.stem}_{stamp}.bak"
+            shutil.copy2(target, backup_path)
+
+        os.replace(temp_path, target)
+        temp_path = None
+
+        if name == "auto_response":
+            vertex.AR_CFG = normalized
+            vertex.RAW_AR_CFG = raw
+        else:
+            vertex.AD_CFG = normalized
+
+        return {
+            "name": name,
+            "file": target.name,
+            "sections": section_count,
+            "backup": str(backup_path.relative_to(root)) if backup_path else None,
+            "bytes": target.stat().st_size,
+        }
+    finally:
+        if temp_path is not None:
+            try:
+                temp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 def _currency_editor_payload(lot_data: dict[str, Any], chip_offer: Any) -> dict[str, Any]:
@@ -709,6 +785,12 @@ def _handle_command(vertex: Any, command: dict[str, Any]) -> dict[str, Any]:
 
     if action == "get_preferences":
         return {"preferences": _get_desktop_preferences(vertex.MAIN_CFG)}
+
+    if action == "update_rule_config":
+        name = command.get("name")
+        content = command.get("content")
+        result = _save_rule_config(vertex, Path.cwd(), name, content)
+        return {"config": result}
 
     if action == "update_preferences":
         updates = command.get("preferences")
