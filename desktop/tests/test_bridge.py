@@ -1,7 +1,6 @@
 import configparser
 import io
-import contextlib
-import io
+import json
 import os
 import sys
 import tempfile
@@ -618,7 +617,7 @@ class DesktopBridgeSerializationTests(unittest.TestCase):
                 events.append("stop")
 
         vertex = FakeVertex()
-        command = json.dumps({"request_id": 9, "action": "shutdown"}) + "\\n"
+        command = json.dumps({"request_id": 9, "action": "shutdown"}) + "\n"
         with patch("desktop.engine_runner.sys.stdin", io.StringIO(command)):
             with patch("desktop.engine_runner.emit", side_effect=lambda payload: events.append(payload)):
                 _command_loop(vertex)
