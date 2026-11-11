@@ -188,6 +188,172 @@ class DesktopBridgeSerializationTests(unittest.TestCase):
                 "text": "A reply",
             })
 
+
+    def test_update_regular_lot_saves_only_supported_fields(self):
+        subcategory = SimpleNamespace(
+            id=50, name="Items", fullname="Test Game / Items",
+            type=SimpleNamespace(name="COMMON"),
+            category=SimpleNamespace(id=7, name="Test Game"),
+        )
+        lot = SimpleNamespace(
+            id=42, description="Before", title="Before", server="", side="",
+            amount=3, price=10.0, currency=SimpleNamespace(name="BYN"),
+            active=True, auto=False, subcategory=subcategory,
+            public_link="https://funpay.com/lots/offer?id=42",
+        )
+        fields = SimpleNamespace(
+            title_ru="Before", description_ru="Old description",
+            price=10.0, amount=3, active=True, auto_delivery=False,
+        )
+
+        class Profile:
+            def get_lots(self):
+                return []
+
+        class FakeAccount:
+            id = 1
+            currency = SimpleNamespace(name="BYN")
+
+            def get_lot_fields(self, lot_id):
+                self.requested_id = lot_id
+                return fields
+
+            def save_lot(self, saved_fields):
+                self.saved_fields = saved_fields
+
+            def get_user(self, _user_id):
+                return Profile()
+
+        account = FakeAccount()
+        vertex = SimpleNamespace(
+            account=account, profile=None, curr_profile=None, lots_ids=[],
+            desktop_lots={"42": serialize_lot(lot)},
+        )
+        result = _handle_command(vertex, {
+            "action": "update_lot",
+            "lot_id": "42",
+            "values": {
+                "title": "After",
+                "description": "New description",
+                "price": 17.5,
+                "amount": 8,
+                "active": False,
+            },
+        })
+        self.assertEqual(account.requested_id, 42)
+        self.assertEqual(account.saved_fields.title_ru, "After")
+        self.assertEqual(account.saved_fields.description_ru, "New description")
+        self.assertEqual(account.saved_fields.price, 17.5)
+        self.assertEqual(account.saved_fields.amount, 8)
+        self.assertFalse(account.saved_fields.active)
+        self.assertEqual(result["saved_lot_id"], "42")
+
+    def test_update_regular_lot_does_not_allow_quantity_change_with_builtin_delivery(self):
+        subcategory = SimpleNamespace(
+            id=50, name="Items", fullname="Test Game / Items",
+            type=SimpleNamespace(name="COMMON"),
+            category=SimpleNamespace(id=7, name="Test Game"),
+        )
+        lot = SimpleNamespace(
+            id=42, description="Item", title="Item", server="", side="",
+            amount=2, price=10.0, currency=SimpleNamespace(name="BYN"),
+            active=True, auto=True, subcategory=subcategory,
+            public_link="https://funpay.com/lots/offer?id=42",
+        )
+        fields = SimpleNamespace(auto_delivery=True, amount=2)
+
+        class FakeAccount:
+            id = 1
+
+            def get_lot_fields(self, _lot_id):
+                return fields
+
+            def save_lot(self, _fields):
+                self.saved = True
+
+        account = FakeAccount()
+        vertex = SimpleNamespace(
+            account=account,
+            desktop_lots={"42": serialize_lot(lot)},
+        )
+        with self.assertRaisesRegex(ValueError, "встроенная автовыдача"):
+            _handle_command(vertex, {
+                "action": "update_lot", "lot_id": "42",
+                "values": {"amount": 9},
+            })
+        self.assertFalse(hasattr(account, "saved"))
+
+    def test_update_currency_offer_uses_chip_fields_api(self):
+        subcategory = SimpleNamespace(
+            id=88, name="Coins", fullname="Game / Coins",
+            type=SimpleNamespace(name="CURRENCY"),
+            category=SimpleNamespace(id=8, name="Game"),
+        )
+        lot = SimpleNamespace(
+            id="1-2-88-3", description="Coins", title="Coins", server="", side="",
+            amount=2, price=4.0, currency=SimpleNamespace(name="BYN"),
+            active=True, auto=False, subcategory=subcategory,
+            public_link="https://funpay.com/chips/offer?id=1-2-88-3",
+        )
+        offer = SimpleNamespace(lot_id="1-2-88-3", price=4.0, amount=2, active=True)
+        chip_fields = SimpleNamespace(chip_offers={"1-2-88-3": offer})
+
+        class Profile:
+            def get_lots(self):
+                return []
+
+        class FakeAccount:
+            id = 1
+            currency = SimpleNamespace(name="BYN")
+
+            def get_chip_fields(self, subcategory_id):
+                self.requested_subcategory_id = subcategory_id
+                return chip_fields
+
+            def save_chip(self, fields_to_save):
+                self.saved = fields_to_save
+
+            def get_user(self, _user_id):
+                return Profile()
+
+        account = FakeAccount()
+        vertex = SimpleNamespace(
+            account=account, profile=None, curr_profile=None, lots_ids=[],
+            desktop_lots={"1-2-88-3": serialize_lot(lot)},
+        )
+        result = _handle_command(vertex, {
+            "action": "update_lot",
+            "lot_id": "1-2-88-3",
+            "values": {"price": 6.5, "amount": 12, "active": False},
+        })
+        self.assertEqual(account.requested_subcategory_id, 88)
+        self.assertIs(account.saved, chip_fields)
+        self.assertEqual(offer.price, 6.5)
+        self.assertEqual(offer.amount, 12)
+        self.assertFalse(offer.active)
+        self.assertEqual(result["saved_lot_id"], "1-2-88-3")
+
+    def test_raise_category_is_scoped_to_categories_with_own_regular_lots(self):
+        class FakeAccount:
+            def raise_lots(self, category_id):
+                self.raised_category = category_id
+                return 1800
+
+        account = FakeAccount()
+        vertex = SimpleNamespace(
+            account=account,
+            desktop_lots={
+                "1": {"subcategory_type": "COMMON", "category_id": 7, "category_name": "Game"},
+                "2": {"subcategory_type": "CURRENCY", "category_id": 7, "category_name": "Game"},
+            },
+        )
+        result = _handle_command(vertex, {"action": "raise_category", "category_id": 7})
+        self.assertEqual(account.raised_category, 7)
+        self.assertEqual(result["wait_seconds"], 1800)
+        with self.assertRaisesRegex(ValueError, "не найдено обычных лотов"):
+            _handle_command(vertex, {"action": "raise_category", "category_id": 8})
+        self.assertEqual(account.raised_category, 7)
+
     def test_order_analytics_groups_by_date_and_counts_statuses(self):
         orders = [
             SimpleNamespace(
