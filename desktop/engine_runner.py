@@ -155,9 +155,10 @@ def _save_rule_config(vertex: Any, root: Path, name: str, content: str) -> dict[
         raise ValueError("Конфигурация содержит недопустимый нулевой символ")
 
     root = Path(root).resolve()
-    config_dir = root / "configs"
-    config_dir.mkdir(parents=True, exist_ok=True)
+    config_dir = _ensure_safe_directory(root, "configs")
     target = config_dir / files[name]
+    if target.is_symlink():
+        raise ValueError("Файл конфигурации не должен быть символической ссылкой.")
     temp_path: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(
@@ -183,8 +184,7 @@ def _save_rule_config(vertex: Any, root: Path, name: str, content: str) -> dict[
 
         backup_path: Path | None = None
         if target.is_file():
-            backup_dir = root / "storage" / "config_backups"
-            backup_dir.mkdir(parents=True, exist_ok=True)
+            backup_dir = _ensure_safe_directory(root, "storage", "config_backups")
             stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
             backup_path = backup_dir / f"{target.stem}_{stamp}.bak"
             shutil.copy2(target, backup_path)
