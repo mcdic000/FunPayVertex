@@ -74,6 +74,9 @@ class DesktopBridgeSerializationTests(unittest.TestCase):
         self.assertEqual(result["active"], True)
         self.assertEqual(result["category_id"], 9)
         self.assertEqual(result["category_name"], "Test Game")
+        self.assertEqual(
+            result["edit_link"], "https://funpay.com/lots/offerEdit?offer=77"
+        )
         self.assertNotIn("html", result)
         self.assertNotIn("private widget", str(result))
 
@@ -183,6 +186,9 @@ class DesktopBridgeSerializationTests(unittest.TestCase):
         self.assertNotIn(101, vertex.lots_ids)
         self.assertEqual(by_id["101"]["category_id"], 7)
         self.assertEqual(by_id["1-2-88-2"]["category_id"], 8)
+        self.assertEqual(
+            by_id["1-2-88-2"]["edit_link"], "https://funpay.com/chips/88/trade"
+        )
         self.assertIn("1-2-88-2", vertex.desktop_lots)
 
     def test_collect_sales_follows_cursor_and_deduplicates(self):
