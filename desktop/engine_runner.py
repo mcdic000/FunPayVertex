@@ -463,6 +463,10 @@ def _handle_command(vertex: Any, command: dict[str, Any]) -> dict[str, Any]:
             include_refunded=True,
             locale=locale,
         )
+        if start_from is not None and next_cursor is not None and str(next_cursor) == start_from:
+            raise RuntimeError(
+                "FunPay повторил курсор списка заказов без перехода к следующей странице."
+            )
         return {
             "orders": [serialize_order(order) for order in orders],
             "next_cursor": next_cursor,
