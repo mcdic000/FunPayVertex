@@ -252,10 +252,35 @@ class DesktopBridgeSerializationTests(unittest.TestCase):
                 raise AssertionError(f"Unexpected cursor: {start_from}")
 
         account = FakeAccount()
-        orders, has_more = _collect_sales(account, max_pages=10)
+        orders, cursor, locale, has_more = _collect_sales(account, max_pages=10)
         self.assertEqual([order.id for order in orders], ["1", "2", "3"])
+        self.assertIsNone(cursor)
+        self.assertEqual(locale, "ru")
         self.assertFalse(has_more)
         self.assertEqual(account.calls, [None, "2"])
+
+    def test_collect_sales_continues_from_existing_cursor(self):
+        fourth = SimpleNamespace(id="4", price=6.0)
+        fifth = SimpleNamespace(id="5", price=7.0)
+
+        class FakeAccount:
+            calls = []
+
+            def get_sales(self, start_from=None, locale=None, **_kwargs):
+                self.calls.append((start_from, locale))
+                if start_from == "4":
+                    return None, [fourth, fifth], "ru", {}
+                raise AssertionError(f"Unexpected cursor: {start_from}")
+
+        account = FakeAccount()
+        orders, cursor, locale, has_more = _collect_sales(
+            account, max_pages=10, start_from="4", locale="ru"
+        )
+        self.assertEqual([order.id for order in orders], ["4", "5"])
+        self.assertIsNone(cursor)
+        self.assertEqual(locale, "ru")
+        self.assertFalse(has_more)
+        self.assertEqual(account.calls, [("4", "ru")])
 
     def test_message_serializes_text_and_author(self):
         message = SimpleNamespace(
