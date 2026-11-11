@@ -45,7 +45,7 @@ python -m desktop
 - **Analytics:** sales count, status breakdown, daily totals and amount summary. Each request loads up to 10 pages; use "Загрузить старые продажи" repeatedly to continue through older history. Totals are merged across loaded pages.
 - **Event journal and notifications:** stores the last 250 local event entries in `storage/desktop_events.jsonl`, restores them on the next launch, and can show Windows tray alerts for new orders, order status changes, and incoming messages. Clearing the journal only clears the local log; it does not affect FunPay.
 - **Automation:** reads and saves Vertex's global auto-delivery, auto-response, and auto-raise switches.
-- **Additional settings:** reads and saves selected Boolean preferences already present in the local Vertex configuration.
+- **Additional settings:** reads and saves selected Boolean preferences already present in the local Vertex configuration. Includes in-app editors for auto-response and auto-delivery rules; Vertex's own validators run before saving, the previous file is backed up under `storage/config_backups/`, and the in-memory rule objects are refreshed without restarting the engine.
 
 ## Important behavior and limitations
 
@@ -54,6 +54,8 @@ python -m desktop
 - The lot list is built from the public seller profile and the private trade pages for categories discoverable from that profile (including categories present in the previous in-memory profile). It does not exhaustively query every FunPay category. If a seller has only paused offers in a category that has never appeared in the profile, that category may not be discovered automatically.
 - Manual raise requests use the standard Vertex `account.raise_lots()` method. FunPay enforces its cooldown; a running automatic raise loop may also submit requests.
 - The create wizard opens FunPay's native category form in the default browser; the browser may need its own FunPay login. Saving the new listing is performed on FunPay, not by an in-app generic form.
+- The auto-delivery rule editor checks referenced product files under `storage/products/` and requires `$product` in the response whenever a product file is selected. Keep each stock file in that folder before saving the corresponding rule.
+- If a rule fails validation, the existing configuration file and live in-memory rules are left unchanged.
 - Built-in FunPay auto-delivery secrets are not displayed or edited by this interface. The quantity field is locked for these lots to avoid accidentally replacing inventory.
 - Currency offers use Vertex's separate `ChipFields` API. Their title/description and deletion are not exposed by this first desktop editor; price, amount, and active state are editable.
 - Analytics are a bounded sample of up to 10 pages of recent sales, not a complete lifetime accounting ledger. "Amount" is the sum of order prices in the retrieved sample; it is not net profit, payout, or current balance.
