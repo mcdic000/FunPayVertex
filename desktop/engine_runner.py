@@ -217,7 +217,7 @@ def _stock_file_path(root: Path, filename: Any, create_dir: bool = True) -> Path
     if not isinstance(filename, str):
         raise ValueError("Имя файла товаров должно быть текстом")
     name = filename.strip()
-    invalid_chars = set('<>:"/\\|?*')
+    invalid_chars = set('<>:"/\\\\|?*')
     if (
         not name or len(name) > 128 or name in (".", "..")
         or name.startswith(".") or name.endswith((".", " "))
@@ -230,32 +230,48 @@ def _stock_file_path(root: Path, filename: Any, create_dir: bool = True) -> Path
     }
     if name.split(".", 1)[0].upper() in reserved:
         raise ValueError("Это имя зарезервировано Windows.")
+
     root = Path(root).resolve()
-    products_dir = root / "storage" / "products"
+    storage_dir = root / "storage"
+    products_dir = storage_dir / "products"
     if create_dir:
         products_dir.mkdir(parents=True, exist_ok=True)
-    if products_dir.is_symlink():
-        raise ValueError("Папка storage/products не должна быть символической ссылкой.")
-    products_dir_resolved = products_dir.resolve()
-    if products_dir_resolved.parent != (root / "storage").resolve():
+    if storage_dir.is_symlink() or products_dir.is_symlink():
+        raise ValueError("Папки storage и storage/products не должны быть символическими ссылками.")
+    root_resolved = root.resolve()
+    storage_resolved = storage_dir.resolve()
+    products_resolved = products_dir.resolve()
+    if storage_resolved.parent != root_resolved or products_resolved.parent != storage_resolved:
         raise ValueError("Папка товаров выходит за пределы проекта.")
+
     target = products_dir / name
     if target.is_symlink():
         raise ValueError("Символические ссылки в папке товаров не поддерживаются.")
-    if target.resolve().parent != products_dir_resolved:
+    if target.resolve().parent != products_resolved:
         raise ValueError("Путь файла выходит за пределы storage/products.")
     return target
 
 
+
 def _product_file_metadata(path: Path) -> dict[str, Any]:
-    content = path.read_text(encoding="utf-8")
-    lines = content.splitlines()
-    return {
+    stat = path.stat()
+    base = {
         "name": path.name,
-        "bytes": path.stat().st_size,
+        "bytes": stat.st_size,
+        "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
+    }
+    if stat.st_size > 5 * 1024 * 1024:
+        return {**base, "lines": None, "products": None,
+                "read_error": "Файл больше 5 МБ; просмотр в редакторе недоступен"}
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError):
+        return {**base, "lines": None, "products": None,
+                "read_error": "Не удалось прочитать файл как UTF-8"}
+    return {
+        **base,
         "lines": len(lines),
         "products": sum(1 for line in lines if line.strip()),
-        "modified": datetime.fromtimestamp(path.stat().st_mtime).isoformat(timespec="seconds"),
     }
 
 
