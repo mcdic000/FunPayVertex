@@ -11,7 +11,7 @@ from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QDialog, QDialogButtonBox,
     QDoubleSpinBox, QFormLayout, QFrame, QHBoxLayout, QHeaderView, QLabel,
-    QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QScrollArea,
+    QFileDialog, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QScrollArea,
     QPushButton, QSpinBox, QStackedWidget, QTableWidget, QTableWidgetItem,
     QTextEdit, QVBoxLayout, QWidget,
 )
@@ -223,6 +223,10 @@ class DesktopWindow(QMainWindow):
         self.message_input.setPlaceholderText("Напиши сообщение...")
         self.message_input.returnPressed.connect(self._send_chat_message)
         compose.addWidget(self.message_input, 1)
+        self.image_button = QPushButton("Фото")
+        self.image_button.setToolTip("Отправить изображение в личный чат")
+        self.image_button.clicked.connect(self._send_chat_image)
+        compose.addWidget(self.image_button)
         self.send_button = QPushButton("Отправить")
         self.send_button.setObjectName("primaryButton")
         self.send_button.clicked.connect(self._send_chat_message)
@@ -614,6 +618,9 @@ class DesktopWindow(QMainWindow):
                 self.preferences_status.setText(f"Не удалось сохранить настройки: {error}")
             elif action == "update_automation_settings":
                 self.automation_status.setText(f"Не удалось сохранить автоматизации: {error}")
+            elif action == "send_image":
+                QMessageBox.warning(self, "Не удалось отправить изображение", error)
+                self.image_button.setEnabled(True)
             return
         action = response.get("action")
         data = response.get("data", {})
@@ -653,10 +660,15 @@ class DesktopWindow(QMainWindow):
             self._add_activity("Настройки автоматизаций сохранены")
         elif action == "get_order_details":
             self._show_order_details(data.get("order", {}))
-        elif action == "send_message":
+        elif action in ("send_message", "send_image"):
             self.message_input.clear()
-            self._add_activity("Сообщение отправлено")
-            self._send_command("get_chat_history", chat_id=self._selected_chat_id)
+            self._add_activity(
+                "Изображение отправлено" if action == "send_image" else "Сообщение отправлено"
+            )
+            self._send_command(
+                "get_chat_history", chat_id=self._selected_chat_id,
+                chat_name=self._chats.get(self._selected_chat_id, {}).get("name", "")
+            )
 
     def _set_orders(self, orders: list[dict]) -> None:
         self.order_table.setRowCount(len(orders))
@@ -1071,6 +1083,34 @@ class DesktopWindow(QMainWindow):
             self.send_button.setEnabled(False)
             self._send_command("send_message", chat_id=self._selected_chat_id, text=text)
             QTimer.singleShot(800, lambda: self.send_button.setEnabled(True))
+
+    def _send_chat_image(self) -> None:
+        if not self._selected_chat_id:
+            QMessageBox.information(self, "Чат не выбран", "Сначала выбери диалог.")
+            return
+        chat = self._chats.get(self._selected_chat_id, {})
+        if not chat:
+            QMessageBox.information(self, "Чат не найден", "Обнови список чатов и выбери диалог ещё раз.")
+            return
+        image_path, _ = QFileDialog.getOpenFileName(
+            self, "Выбрать изображение", "",
+            "Изображения (*.png *.jpg *.jpeg *.gif *.webp)"
+        )
+        if not image_path:
+            return
+        answer = QMessageBox.question(
+            self, "Отправить изображение?",
+            "Загрузить выбранное изображение и отправить его в этот личный чат FunPay? "
+            "Размер файла должен быть не более 10 МБ.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer == QMessageBox.StandardButton.Yes:
+            self.image_button.setEnabled(False)
+            self._send_command(
+                "send_image", chat_id=self._selected_chat_id, image_path=image_path
+            )
+            QTimer.singleShot(1500, lambda: self.image_button.setEnabled(True))
 
     def _add_activity(self, text: str) -> None:
         timestamp = datetime.now().strftime("%H:%M:%S")
