@@ -133,6 +133,43 @@ def _handle_command(vertex: Any, command: dict[str, Any]) -> dict[str, Any]:
         )
         return {"orders": [serialize_order(order) for order in orders]}
 
+    if action == "get_order_details":
+        order_id = str(command.get("order_id", "")).lstrip("#")
+        if not order_id:
+            raise ValueError("Не указан ID заказа")
+        order = account.get_order(order_id)
+        fields = []
+        for field_id, field in (getattr(order, "fields", None) or {}).items():
+            fields.append({
+                "id": str(field_id),
+                "name": getattr(field, "name", None) or str(field_id),
+                "value": str(getattr(field, "value", "")),
+            })
+        review = getattr(order, "review", None)
+        review_data = None if review is None else {
+            "stars": getattr(review, "stars", None),
+            "text": getattr(review, "text", None) or "",
+            "reply": getattr(review, "reply", None) or "",
+        }
+        subcategory = getattr(order, "subcategory", None)
+        server = getattr(order, "server", None)
+        side = getattr(order, "side", None)
+        return {"order": {
+            "id": str(getattr(order, "id", order_id)),
+            "status": _value(getattr(order, "status", None)),
+            "buyer": getattr(order, "buyer_username", None) or "",
+            "buyer_id": getattr(order, "buyer_id", ""),
+            "sum": getattr(order, "sum", ""),
+            "currency": _value(getattr(order, "currency", None)),
+            "amount": getattr(order, "amount", ""),
+            "category": getattr(subcategory, "fullname", "") if subcategory else "",
+            "server": getattr(server, "name", "") if server else "",
+            "side": getattr(side, "name", "") if side else "",
+            "player": getattr(order, "player", None) or "",
+            "fields": fields,
+            "review": review_data,
+        }}
+
     if action == "get_chats":
         chats = account.get_chats(update=True)
         return {"chats": [serialize_chat(chat) for chat in chats.values()]}
