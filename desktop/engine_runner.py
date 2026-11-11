@@ -68,6 +68,34 @@ def serialize_message(message: Any) -> dict[str, Any]:
 
 
 
+def _serialize_create_categories(sorted_subcategories: dict[Any, Any]) -> list[dict[str, Any]]:
+    categories = []
+    for type_key, entries in sorted_subcategories.items():
+        for subcategory in entries.values():
+            kind = _value(getattr(subcategory, "type", type_key)).upper()
+            subcategory_id = int(subcategory.id)
+            if kind == "CURRENCY":
+                create_link = f"https://funpay.com/chips/{subcategory_id}/trade"
+            elif kind == "COMMON":
+                create_link = f"https://funpay.com/lots/offerEdit?node={subcategory_id}"
+            else:
+                continue
+            category = getattr(subcategory, "category", None)
+            categories.append({
+                "id": subcategory_id,
+                "name": getattr(subcategory, "name", "") or "",
+                "fullname": getattr(subcategory, "fullname", "") or "",
+                "category_name": getattr(category, "name", "") or "",
+                "category_id": getattr(category, "id", None),
+                "type": kind,
+                "create_link": create_link,
+            })
+    categories.sort(key=lambda item: (
+        item["category_name"].casefold(), item["name"].casefold(), item["type"]
+    ))
+    return categories
+
+
 def _currency_editor_payload(lot_data: dict[str, Any], chip_offer: Any) -> dict[str, Any]:
     return {
         "title": lot_data.get("title") or "Валютное предложение",
@@ -379,31 +407,7 @@ def _handle_command(vertex: Any, command: dict[str, Any]) -> dict[str, Any]:
         }
 
     if action == "get_create_categories":
-        categories = []
-        for subcategory_type, entries in account.get_sorted_subcategories().items():
-            for subcategory in entries.values():
-                kind = _value(getattr(subcategory, "type", subcategory_type)).upper()
-                subcategory_id = int(subcategory.id)
-                if kind == "CURRENCY":
-                    create_link = f"https://funpay.com/chips/{subcategory_id}/trade"
-                elif kind == "COMMON":
-                    create_link = f"https://funpay.com/lots/offerEdit?node={subcategory_id}"
-                else:
-                    continue
-                category = getattr(subcategory, "category", None)
-                category_name = getattr(category, "name", "") or ""
-                categories.append({
-                    "id": subcategory_id,
-                    "name": getattr(subcategory, "name", "") or "",
-                    "fullname": getattr(subcategory, "fullname", "") or "",
-                    "category_name": category_name,
-                    "category_id": getattr(category, "id", None),
-                    "type": kind,
-                    "create_link": create_link,
-                })
-        categories.sort(key=lambda item: (
-            item["category_name"].casefold(), item["name"].casefold(), item["type"]
-        ))
+        categories = _serialize_create_categories(account.get_sorted_subcategories())
         return {"categories": categories}
 
     if action == "get_lots":
