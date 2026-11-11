@@ -755,9 +755,20 @@ class DesktopBridgeSerializationTests(unittest.TestCase):
 
             def load_auto_response(path):
                 config = read_config(path)
-                for section in config.sections():
+                command_sets = []
+                for section in list(config.sections()):
                     if not config.has_option(section, "response") or not config[section]["response"].strip():
                         raise ValueError(f"Response missing in {section}")
+                    if "|" in section:
+                        command_sets.append(section)
+                for command_set in command_sets:
+                    parameters = dict(config[command_set])
+                    for command in command_set.split("|"):
+                        command = command.strip()
+                        if command and command not in config.sections():
+                            config.add_section(command)
+                            for key, value in parameters.items():
+                                config.set(command, key, value)
                 return config
 
             fake_loader.load_auto_response_config = load_auto_response
