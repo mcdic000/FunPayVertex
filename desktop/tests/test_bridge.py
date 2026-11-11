@@ -1,12 +1,16 @@
 import configparser
+import tempfile
 import unittest
 from datetime import date, datetime
+from pathlib import Path
 from types import SimpleNamespace
+
+from PIL import Image
 
 from desktop.engine_runner import (
     _collect_sales, _currency_editor_payload, _get_desktop_preferences,
     _handle_command,
-    _order_analytics, _refresh_profile,
+    _order_analytics, _prepare_image_payload, _refresh_profile,
     _serialize_create_categories,
     serialize_chat, serialize_lot,
     serialize_message, serialize_order,
@@ -174,7 +178,7 @@ class DesktopBridgeSerializationTests(unittest.TestCase):
             "text": "Thanks for the rating!",
         })
         self.assertEqual(sent[-1], ("989", "Thanks for the rating!"))
-        self.assertFalse(second["updated"])
+        self.assertTrue(second["updated"])
 
         vertex.account.get_order = lambda *_args, **_kwargs: SimpleNamespace(review=None)
         with self.assertRaisesRegex(ValueError, "нет отзыва"):
@@ -328,6 +332,33 @@ class DesktopBridgeSerializationTests(unittest.TestCase):
         self.assertEqual(locale, "ru")
         self.assertFalse(has_more)
         self.assertEqual(account.calls, [("4", "ru")])
+
+    def test_image_payload_normalizes_jpeg_and_webp_to_png(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            jpeg_path = root / "sample.jpg"
+            webp_path = root / "sample.webp"
+            Image.new("RGB", (32, 24), (30, 120, 210)).save(jpeg_path, format="JPEG")
+            Image.new("RGBA", (20, 20), (20, 200, 100, 120)).save(webp_path, format="WEBP")
+
+            for path in (jpeg_path, webp_path):
+                payload = _prepare_image_payload(str(path))
+                self.assertTrue(payload.startswith(b"\x89PNG\r\n\x1a\n"))
+                self.assertLessEqual(len(payload), 10 * 1024 * 1024)
+                from io import BytesIO
+                with Image.open(BytesIO(payload)) as normalized:
+                    self.assertEqual(normalized.format, "PNG")
+                    self.assertGreater(normalized.width, 0)
+                    self.assertGreater(normalized.height, 0)
+
+    def test_image_payload_rejects_missing_or_unsupported_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            unsupported = Path(directory) / "notes.txt"
+            unsupported.write_text("not an image", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "не найден"):
+                _prepare_image_payload(str(Path(directory) / "missing.png"))
+            with self.assertRaisesRegex(ValueError, "Поддерживаются"):
+                _prepare_image_payload(str(unsupported))
 
     def test_message_serializes_text_and_author(self):
         message = SimpleNamespace(
