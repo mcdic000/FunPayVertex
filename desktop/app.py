@@ -321,6 +321,12 @@ class DesktopWindow(QMainWindow):
         open_lot_button = QPushButton("Открыть на FunPay")
         open_lot_button.clicked.connect(self._open_selected_lot)
         lot_actions.addWidget(open_lot_button)
+        native_edit_button = QPushButton("Форма редактирования")
+        native_edit_button.setToolTip(
+            "Открыть штатную форму FunPay со всеми полями выбранной категории"
+        )
+        native_edit_button.clicked.connect(self._open_native_lot_editor)
+        lot_actions.addWidget(native_edit_button)
         export_lots = QPushButton("Экспорт CSV")
         export_lots.clicked.connect(
             lambda: self._export_table_csv(self.lot_table, "funpay_lots.csv")
@@ -805,6 +811,19 @@ class DesktopWindow(QMainWindow):
         if seconds and not pieces:
             pieces.append(f"{seconds} сек.")
         return " ".join(pieces) or "0 сек."
+
+    def _open_native_lot_editor(self) -> None:
+        lot = self._selected_lot()
+        if not lot:
+            return
+        url = lot.get("edit_link")
+        if not url:
+            QMessageBox.information(
+                self, "Форма недоступна",
+                "Для этого предложения не удалось получить ссылку на форму редактирования.",
+            )
+            return
+        QDesktopServices.openUrl(QUrl(url))
 
     def _raise_selected_category(self) -> None:
         category_id = self.raise_category_combo.currentData()
