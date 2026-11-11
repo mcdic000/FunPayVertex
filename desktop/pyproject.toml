@@ -17,3 +17,4 @@ funpay-assistant = "desktop.app:main"
 
 [tool.setuptools]
 packages = ["desktop"]
+package-dir = {desktop = "."}
