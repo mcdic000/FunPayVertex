@@ -213,6 +213,130 @@ def _save_rule_config(vertex: Any, root: Path, name: str, content: str) -> dict[
                 pass
 
 
+def _stock_file_path(root: Path, filename: Any, create_dir: bool = True) -> Path:
+    if not isinstance(filename, str):
+        raise ValueError("Имя файла товаров должно быть текстом")
+    name = filename.strip()
+    invalid_chars = set('<>:"/\\|?*')
+    if (
+        not name or len(name) > 128 or name in (".", "..")
+        or name.startswith(".") or name.endswith((".", " "))
+        or any(ord(char) < 32 or char in invalid_chars for char in name)
+        or Path(name).name != name
+    ):
+        raise ValueError("Недопустимое имя файла. Укажи только имя без папок и специальных символов.")
+    reserved = {"CON", "PRN", "AUX", "NUL"} | {
+        f"{prefix}{number}" for prefix in ("COM", "LPT") for number in range(1, 10)
+    }
+    if name.split(".", 1)[0].upper() in reserved:
+        raise ValueError("Это имя зарезервировано Windows.")
+    root = Path(root).resolve()
+    products_dir = root / "storage" / "products"
+    if create_dir:
+        products_dir.mkdir(parents=True, exist_ok=True)
+    if products_dir.is_symlink():
+        raise ValueError("Папка storage/products не должна быть символической ссылкой.")
+    products_dir_resolved = products_dir.resolve()
+    if products_dir_resolved.parent != (root / "storage").resolve():
+        raise ValueError("Папка товаров выходит за пределы проекта.")
+    target = products_dir / name
+    if target.is_symlink():
+        raise ValueError("Символические ссылки в папке товаров не поддерживаются.")
+    if target.resolve().parent != products_dir_resolved:
+        raise ValueError("Путь файла выходит за пределы storage/products.")
+    return target
+
+
+def _product_file_metadata(path: Path) -> dict[str, Any]:
+    content = path.read_text(encoding="utf-8")
+    lines = content.splitlines()
+    return {
+        "name": path.name,
+        "bytes": path.stat().st_size,
+        "lines": len(lines),
+        "products": sum(1 for line in lines if line.strip()),
+        "modified": datetime.fromtimestamp(path.stat().st_mtime).isoformat(timespec="seconds"),
+    }
+
+
+def _list_product_files(root: Path) -> list[dict[str, Any]]:
+    products_dir = root / "storage" / "products"
+    products_dir.mkdir(parents=True, exist_ok=True)
+    if products_dir.is_symlink():
+        raise ValueError("Папка storage/products не должна быть символической ссылкой.")
+    files = []
+    for path in products_dir.iterdir():
+        if not path.is_file() or path.is_symlink():
+            continue
+        try:
+            files.append(_product_file_metadata(path))
+        except (OSError, UnicodeError):
+            files.append({
+                "name": path.name,
+                "bytes": path.stat().st_size,
+                "lines": None,
+                "products": None,
+                "modified": datetime.fromtimestamp(path.stat().st_mtime).isoformat(timespec="seconds"),
+                "read_error": "Не удалось прочитать файл как UTF-8",
+            })
+    return sorted(files, key=lambda item: item["name"].casefold())
+
+
+def _read_product_file(root: Path, filename: Any) -> dict[str, Any]:
+    path = _stock_file_path(root, filename)
+    if not path.is_file():
+        raise ValueError(f"Файл товаров «{path.name}» не найден.")
+    if path.stat().st_size > 5 * 1024 * 1024:
+        raise ValueError("Файл товаров слишком большой (максимум 5 МБ).")
+    try:
+        content = path.read_text(encoding="utf-8")
+    except UnicodeError as exc:
+        raise ValueError("Файл товаров не является корректным UTF-8 текстом.") from exc
+    return {"file": _product_file_metadata(path), "content": content}
+
+
+def _save_product_file(root: Path, filename: Any, content: Any) -> dict[str, Any]:
+    path = _stock_file_path(root, filename)
+    if not isinstance(content, str):
+        raise ValueError("Содержимое файла товаров должно быть текстом.")
+    if len(content.encode("utf-8")) > 5 * 1024 * 1024:
+        raise ValueError("Файл товаров слишком большой (максимум 5 МБ).")
+    if "\\x00" in content:
+        raise ValueError("Файл товаров содержит недопустимый нулевой символ.")
+
+    backup_path: Path | None = None
+    if path.is_file():
+        backup_dir = root / "storage" / "config_backups" / "products"
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        backup_path = backup_dir / f"{path.name}.{stamp}.bak"
+        shutil.copy2(path, backup_path)
+
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", newline="",
+            prefix=f".{path.name}.", suffix=".tmp",
+            dir=str(path.parent), delete=False,
+        ) as temporary:
+            temporary.write(content)
+            temporary.flush()
+            os.fsync(temporary.fileno())
+            temporary_path = Path(temporary.name)
+        os.replace(temporary_path, path)
+        temporary_path = None
+    finally:
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+    result = _product_file_metadata(path)
+    result["backup"] = str(backup_path.relative_to(root)) if backup_path else None
+    return result
+
+
 def _currency_editor_payload(lot_data: dict[str, Any], chip_offer: Any) -> dict[str, Any]:
     return {
         "title": lot_data.get("title") or "Валютное предложение",
@@ -576,6 +700,19 @@ def _handle_command(vertex: Any, command: dict[str, Any]) -> dict[str, Any]:
     if action == "get_create_categories":
         categories = _serialize_create_categories(account.get_sorted_subcategories())
         return {"categories": categories}
+
+    if action == "get_product_files":
+        return {"files": _list_product_files(Path.cwd())}
+
+    if action == "get_product_file":
+        filename = command.get("filename")
+        return _read_product_file(Path.cwd(), filename)
+
+    if action == "save_product_file":
+        filename = command.get("filename")
+        content = command.get("content")
+        result = _save_product_file(Path.cwd(), filename, content)
+        return {"file": result, "files": _list_product_files(Path.cwd())}
 
     if action == "get_lots":
         lots = _refresh_profile(vertex)
