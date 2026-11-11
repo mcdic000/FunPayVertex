@@ -10,3 +10,5 @@
 test.py
 *.zip
 __pycache__
+# Desktop development environment
+/desktop/.venv/
