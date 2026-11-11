@@ -378,6 +378,34 @@ def _handle_command(vertex: Any, command: dict[str, Any]) -> dict[str, Any]:
             "auto_raise": vertex.MAIN_CFG["FunPay"].getboolean("autoRaise"),
         }
 
+    if action == "get_create_categories":
+        categories = []
+        for subcategory_type, entries in account.get_sorted_subcategories().items():
+            for subcategory in entries.values():
+                kind = _value(getattr(subcategory, "type", subcategory_type)).upper()
+                subcategory_id = int(subcategory.id)
+                if kind == "CURRENCY":
+                    create_link = f"https://funpay.com/chips/{subcategory_id}/trade"
+                elif kind == "COMMON":
+                    create_link = f"https://funpay.com/lots/offerEdit?node={subcategory_id}"
+                else:
+                    continue
+                category = getattr(subcategory, "category", None)
+                category_name = getattr(category, "name", "") or ""
+                categories.append({
+                    "id": subcategory_id,
+                    "name": getattr(subcategory, "name", "") or "",
+                    "fullname": getattr(subcategory, "fullname", "") or "",
+                    "category_name": category_name,
+                    "category_id": getattr(category, "id", None),
+                    "type": kind,
+                    "create_link": create_link,
+                })
+        categories.sort(key=lambda item: (
+            item["category_name"].casefold(), item["name"].casefold(), item["type"]
+        ))
+        return {"categories": categories}
+
     if action == "get_lots":
         lots = _refresh_profile(vertex)
         return {"lots": lots, "count": len(lots)}
