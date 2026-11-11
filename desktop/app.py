@@ -458,6 +458,12 @@ class DesktopWindow(QMainWindow):
             lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.project_root / "configs")))
         )
         preference_actions.addWidget(open_config_folder)
+        open_auto_response = QPushButton("Правила автоответов")
+        open_auto_response.clicked.connect(self._open_auto_response_config)
+        preference_actions.addWidget(open_auto_response)
+        open_auto_delivery = QPushButton("Товары автовыдачи")
+        open_auto_delivery.clicked.connect(self._open_auto_delivery_config)
+        preference_actions.addWidget(open_auto_delivery)
         preference_actions.addStretch(1)
         settings_box.addLayout(preference_actions)
         self.preferences_status = QLabel("Подключи аккаунт, чтобы загрузить параметры.")
@@ -934,6 +940,20 @@ class DesktopWindow(QMainWindow):
         if answer == QMessageBox.StandardButton.Yes:
             self._send_command("update_preferences", preferences=preferences)
 
+    def _open_auto_response_config(self) -> None:
+        path = self.project_root / "configs" / "auto_response.cfg"
+        if not path.is_file():
+            QMessageBox.information(self, "Файл не найден", "Сначала выполни первичную настройку Vertex.")
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+
+    def _open_auto_delivery_config(self) -> None:
+        path = self.project_root / "configs" / "auto_delivery.cfg"
+        if not path.is_file():
+            QMessageBox.information(self, "Файл не найден", "Сначала выполни первичную настройку Vertex.")
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+
     def _export_table_csv(self, table: QTableWidget, default_name: str) -> None:
         path, _ = QFileDialog.getSaveFileName(
             self, "Сохранить таблицу", str(self.project_root / default_name),
@@ -1135,6 +1155,9 @@ class DesktopWindow(QMainWindow):
     def _send_chat_image(self) -> None:
         if not self._selected_chat_id:
             QMessageBox.information(self, "Чат не выбран", "Сначала выбери диалог.")
+            return
+        if self.engine_process.state() != QProcess.ProcessState.Running:
+            QMessageBox.information(self, "Движок не запущен", "Сначала подключи аккаунт.")
             return
         chat = self._chats.get(self._selected_chat_id, {})
         if not chat:
