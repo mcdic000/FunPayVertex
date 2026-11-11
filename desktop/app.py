@@ -741,6 +741,8 @@ class DesktopWindow(QMainWindow):
             elif action == "send_image":
                 QMessageBox.warning(self, "Не удалось отправить изображение", error)
                 self.image_button.setEnabled(True)
+            elif action == "send_review_reply":
+                QMessageBox.warning(self, "Не удалось отправить ответ на отзыв", error)
             elif action == "raise_category":
                 self.lot_status.setText(f"Не удалось поднять лоты: {error}")
                 QMessageBox.warning(self, "Поднятие лотов", error)
@@ -814,6 +816,15 @@ class DesktopWindow(QMainWindow):
             self._add_activity("Настройки автоматизаций сохранены")
         elif action == "get_order_details":
             self._show_order_details(data.get("order", {}))
+        elif action == "send_review_reply":
+            self._add_activity(f"Отправлен ответ на отзыв по заказу #{data.get('order_id', '')}")
+            self._notify_desktop(
+                "Ответ на отзыв отправлен", f"Заказ #{data.get('order_id', '')}"
+            )
+            QMessageBox.information(
+                self, "Ответ отправлен",
+                f"Твой ответ на отзыв по заказу #{data.get('order_id', '')} отправлен.",
+            )
         elif action in ("send_message", "send_image"):
             self.image_button.setEnabled(True)
             self.message_input.clear()
@@ -1512,8 +1523,77 @@ class DesktopWindow(QMainWindow):
         if review:
             lines.extend(["", f"Отзыв: {review.get('stars', '')}/5",
                           review.get("text", "") or ""])
-        QMessageBox.information(self, f"Информация о заказе #{order.get('id', '')}",
-                                "\n".join(lines))
+            if review.get("reply"):
+                lines.append(f"Твой ответ: {review.get('reply')}")
+            message = QMessageBox(self)
+            message.setWindowTitle(f"Информация о заказе #{order.get('id', '')}")
+            message.setText("\n".join(lines))
+            reply_button = None
+            if review.get("text"):
+                reply_button = message.addButton(
+                    "Ответить на отзыв" if not review.get("reply") else "Изменить ответ",
+                    QMessageBox.ButtonRole.ActionRole,
+                )
+            message.addButton(QMessageBox.StandardButton.Close)
+            message.exec()
+            if reply_button is not None and message.clickedButton() is reply_button:
+                self._compose_review_reply(order, review)
+        else:
+            QMessageBox.information(
+                self, f"Информация о заказе #{order.get('id', '')}",
+                "\n".join(lines),
+            )
+
+    def _compose_review_reply(self, order: dict, review: dict) -> None:
+        order_id = str(order.get("id", "")).lstrip("#")
+        if self.engine_process.state() != QProcess.ProcessState.Running:
+            QMessageBox.information(
+                self, "Движок не подключён",
+                "Подключи FunPay, чтобы отправить ответ на отзыв.",
+            )
+            return
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"Ответ на отзыв по заказу #{order_id}")
+        dialog.setMinimumWidth(520)
+        layout = QVBoxLayout(dialog)
+        info = QLabel(
+            f"Оценка покупателя: {review.get('stars', '—')}/5\n"
+            f"Отзыв: {review.get('text', '')}\n\n"
+            "Напиши публичный ответ. Максимум 4000 символов."
+        )
+        info.setWordWrap(True)
+        info.setObjectName("muted")
+        layout.addWidget(info)
+        reply_input = QTextEdit()
+        reply_input.setPlainText(str(review.get("reply") or ""))
+        reply_input.setMinimumHeight(130)
+        layout.addWidget(reply_input)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        reply_text = reply_input.toPlainText().strip()
+        if not reply_text:
+            QMessageBox.warning(self, "Пустой ответ", "Напиши текст ответа перед отправкой.")
+            return
+        if len(reply_text) > 4000:
+            QMessageBox.warning(self, "Слишком длинный ответ", "Максимальная длина — 4000 символов.")
+            return
+        answer = QMessageBox.question(
+            self, "Опубликовать ответ?",
+            f"Опубликовать публичный ответ на отзыв по заказу #{order_id}? "
+            "Его увидят посетители профиля FunPay.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer == QMessageBox.StandardButton.Yes:
+            self._send_command(
+                "send_review_reply", order_id=order_id, text=reply_text
+            )
 
     def _upsert_order(self, order: dict) -> None:
         order_id = str(order.get("id", "")).lstrip("#")
