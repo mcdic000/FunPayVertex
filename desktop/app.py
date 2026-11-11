@@ -11,7 +11,7 @@ from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QDialog, QDialogButtonBox,
     QDoubleSpinBox, QFormLayout, QFrame, QHBoxLayout, QHeaderView, QLabel,
-    QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox,
+    QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QScrollArea,
     QPushButton, QSpinBox, QStackedWidget, QTableWidget, QTableWidgetItem,
     QTextEdit, QVBoxLayout, QWidget,
 )
@@ -443,7 +443,11 @@ class DesktopWindow(QMainWindow):
         self.preferences_status = QLabel("Подключи аккаунт, чтобы загрузить параметры.")
         self.preferences_status.setObjectName("muted")
         settings_box.addWidget(self.preferences_status)
-        settings_layout.addWidget(settings_panel, 1)
+        settings_scroll = QScrollArea()
+        settings_scroll.setWidgetResizable(True)
+        settings_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        settings_scroll.setWidget(settings_panel)
+        settings_layout.addWidget(settings_scroll, 1)
         self.pages.addWidget(settings_page)
 
     def _change_title(self, index: int) -> None:
@@ -567,9 +571,6 @@ class DesktopWindow(QMainWindow):
             self._add_activity(f"Подключён аккаунт {username}")
             self._send_command("get_orders")
             self._send_command("get_chats")
-            self._send_command("get_lots")
-            self._send_command("get_analytics")
-            self._send_command("get_preferences")
             self._send_command("get_settings")
             self._send_command("get_lots")
             self._send_command("get_analytics")
@@ -604,7 +605,15 @@ class DesktopWindow(QMainWindow):
 
     def _handle_response(self, response: dict) -> None:
         if not response.get("ok"):
-            self._add_activity(f"Ошибка {response.get('action')}: {response.get('error', 'неизвестная ошибка')}")
+            action = response.get("action")
+            error = response.get("error", "неизвестная ошибка")
+            self._add_activity(f"Ошибка {action}: {error}")
+            if action in ("get_lot_editor", "update_lot", "delete_lot"):
+                self.lot_status.setText(f"Ошибка работы с лотом: {error}")
+            elif action == "update_preferences":
+                self.preferences_status.setText(f"Не удалось сохранить настройки: {error}")
+            elif action == "update_automation_settings":
+                self.automation_status.setText(f"Не удалось сохранить автоматизации: {error}")
             return
         action = response.get("action")
         data = response.get("data", {})
@@ -622,6 +631,8 @@ class DesktopWindow(QMainWindow):
             self.automation_status.setText("Настройки загружены из configs/_main.cfg")
         elif action == "get_lots":
             self._set_lots(data.get("lots", []))
+        elif action == "get_lot_editor":
+            self._show_lot_editor(data)
         elif action in ("update_lot", "delete_lot"):
             self._set_lots(data.get("lots", []))
             self.lot_status.setText(
@@ -715,18 +726,27 @@ class DesktopWindow(QMainWindow):
         lot = self._selected_lot()
         if not lot:
             return
+        self.lot_status.setText(f"Загружаю все поля лота #{lot.get('id')}...")
+        self._send_command("get_lot_editor", lot_id=str(lot.get("id")))
+
+    def _show_lot_editor(self, data: dict) -> None:
+        lot = data.get("lot") or {}
+        editor = data.get("editor") or {}
+        if not lot or not editor:
+            self.lot_status.setText("Не удалось получить поля выбранного лота.")
+            return
         dialog = QDialog(self)
         dialog.setWindowTitle(f"Изменение лота #{lot.get('id')}")
-        dialog.setMinimumWidth(520)
+        dialog.setMinimumWidth(540)
         layout = QVBoxLayout(dialog)
         form = QFormLayout()
-        is_currency = lot.get("subcategory_type") == "CURRENCY"
+        is_currency = bool(editor.get("is_currency"))
 
-        title_input = QLineEdit(str(lot.get("title") or ""))
+        title_input = QLineEdit(str(editor.get("title") or ""))
         title_input.setMaxLength(250)
         form.addRow("Название", title_input)
         description_input = QTextEdit()
-        description_input.setPlaceholderText("Подробное описание лота")
+        description_input.setPlainText(str(editor.get("description") or ""))
         description_input.setMinimumHeight(115)
         form.addRow("Описание", description_input)
 
@@ -735,20 +755,23 @@ class DesktopWindow(QMainWindow):
         price_input.setDecimals(2)
         price_input.setSingleStep(1.0)
         try:
-            price_input.setValue(float(lot.get("price") or 0.01))
+            price_input.setValue(float(editor.get("price") or 0.01))
         except (TypeError, ValueError):
             price_input.setValue(0.01)
         form.addRow("Цена", price_input)
 
         amount_input = QSpinBox()
         amount_input.setRange(0, 1000000000)
-        amount_input.setValue(int(lot.get("amount") or 0))
-        if lot.get("auto") and not is_currency:
+        try:
+            amount_input.setValue(int(editor.get("amount") or 0))
+        except (TypeError, ValueError):
+            amount_input.setValue(0)
+        if editor.get("auto_delivery") and not is_currency:
             amount_input.setEnabled(False)
         form.addRow("Количество", amount_input)
 
         active_input = QCheckBox("Лот активен и отображается покупателям")
-        active_input.setChecked(bool(lot.get("active")))
+        active_input.setChecked(bool(editor.get("active")))
         form.addRow("Статус", active_input)
         layout.addLayout(form)
 
@@ -756,16 +779,16 @@ class DesktopWindow(QMainWindow):
             title_input.setEnabled(False)
             description_input.setEnabled(False)
             note_text = (
-                "Валютные предложения редактируются через отдельную форму ChipFields. "
+                "Валютные предложения редактируются отдельной формой ChipFields. "
                 "Здесь доступны цена, количество и активность."
             )
-        elif lot.get("auto"):
+        elif editor.get("auto_delivery"):
             note_text = (
-                "У лота включена встроенная автовыдача FunPay. Количество карточек/товаров "
-                "зависит от списка секретов, поэтому поле количества заблокировано."
+                "У лота включена встроенная автовыдача FunPay. Количество зависит от списка товаров "
+                "и не меняется этим экраном. Остальные поля можно редактировать."
             )
         else:
-            note_text = "Будут изменены только указанные поля; остальные параметры лота сохраняются."
+            note_text = "Загружены полные поля лота; остальные параметры сохраняются без изменений."
         note = QLabel(note_text)
         note.setObjectName("muted")
         note.setWordWrap(True)
@@ -782,9 +805,10 @@ class DesktopWindow(QMainWindow):
 
         values = {
             "price": price_input.value(),
-            "amount": amount_input.value(),
             "active": active_input.isChecked(),
         }
+        if not (editor.get("auto_delivery") and not is_currency):
+            values["amount"] = amount_input.value()
         if not is_currency:
             values["title"] = title_input.text().strip()
             values["description"] = description_input.toPlainText()
