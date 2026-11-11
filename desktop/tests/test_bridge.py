@@ -1,16 +1,21 @@
 import configparser
+import contextlib
+import io
+import os
+import sys
 import tempfile
 import unittest
 from datetime import date, datetime
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
+from unittest.mock import patch
 
 from PIL import Image
 
 from desktop.engine_runner import (
     _collect_sales, _currency_editor_payload, _get_desktop_preferences,
     _handle_command,
-    _order_analytics, _prepare_image_payload, _refresh_profile,
+    _order_analytics, _prepare_image_payload, _refresh_profile, main as engine_main,
     _serialize_create_categories,
     serialize_chat, serialize_lot,
     serialize_message, serialize_order,
@@ -636,6 +641,94 @@ class DesktopBridgeSerializationTests(unittest.TestCase):
         vertex = SimpleNamespace(account=FakeAccount())
         with self.assertRaisesRegex(RuntimeError, "повторил курсор"):
             _handle_command(vertex, {"action": "get_orders", "start_from": "20"})
+
+    def test_engine_main_runs_full_lifecycle_with_fake_vertex_and_no_network(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "configs").mkdir()
+            (root / "configs" / "_main.cfg").write_text("[FunPay]\\n", encoding="utf-8")
+
+            calls = []
+            fake_utils = ModuleType("Utils")
+            fake_logger = ModuleType("Utils.logger")
+            fake_logger.configure_logging = lambda: calls.append("logging")
+            fake_config = ModuleType("Utils.config_loader")
+            fake_config.load_main_config = lambda path: calls.append(("main", path)) or {"main": True}
+            fake_config.load_auto_response_config = lambda path: calls.append(("response", path)) or {"response": True}
+            fake_config.load_raw_auto_response_config = lambda path: calls.append(("raw_response", path)) or {"raw": True}
+            fake_config.load_auto_delivery_config = lambda path: calls.append(("delivery", path)) or {"delivery": True}
+
+            class FakeProfile:
+                def get_lots(self):
+                    return [SimpleNamespace(id=1), SimpleNamespace(id=2)]
+
+            class FakeVertex:
+                def __init__(self, main, delivery, response, raw_response, version):
+                    calls.append(("vertex_init", main, delivery, response, raw_response, version))
+                    self.account = SimpleNamespace(username="OfflineSeller", id=12345)
+                    self.profile = None
+
+                def add_handlers_from_plugin(self, module):
+                    calls.append(("handlers", bool(getattr(module, "BIND_TO_NEW_ORDER", None))))
+
+                def init(self):
+                    calls.append("vertex_init_call")
+                    self.profile = FakeProfile()
+
+                def run(self):
+                    calls.append("vertex_run")
+
+            fake_vertex = ModuleType("vertex")
+            fake_vertex.Vertex = FakeVertex
+            fake_utils.logger = fake_logger
+            fake_utils.config_loader = fake_config
+
+            with patch.dict(sys.modules, {
+                "Utils": fake_utils,
+                "Utils.logger": fake_logger,
+                "Utils.config_loader": fake_config,
+                "vertex": fake_vertex,
+            }):
+                with patch("desktop.engine_runner.emit") as emit_mock:
+                    old_cwd = Path.cwd()
+                    old_path = list(sys.path)
+                    try:
+                        result = engine_main(root=root, start_command_loop=False)
+                    finally:
+                        os.chdir(old_cwd)
+                        sys.path[:] = old_path
+
+            self.assertEqual(result, 0)
+            self.assertIn("logging", calls)
+            self.assertIn("vertex_init_call", calls)
+            self.assertIn("vertex_run", calls)
+            payloads = [call.args[0] for call in emit_mock.call_args_list]
+            types = [payload.get("type") for payload in payloads]
+            self.assertEqual(types, ["initializing", "connected", "engine_stopped"])
+            connected = payloads[1]
+            self.assertEqual(connected["username"], "OfflineSeller")
+            self.assertEqual(connected["account_id"], 12345)
+            self.assertEqual(connected["lots_count"], 2)
+            self.assertTrue((root / "configs" / "auto_response.cfg").is_file())
+            self.assertTrue((root / "configs" / "auto_delivery.cfg").is_file())
+
+    def test_engine_main_reports_setup_required_without_account_or_network(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            old_cwd = Path.cwd()
+            old_path = list(sys.path)
+            try:
+                with patch("desktop.engine_runner.emit") as emit_mock:
+                    result = engine_main(root=root, start_command_loop=False)
+            finally:
+                os.chdir(old_cwd)
+                sys.path[:] = old_path
+            self.assertEqual(result, 2)
+            self.assertEqual(
+                emit_mock.call_args.args[0]["type"],
+                "setup_required",
+            )
+            self.assertTrue((root / "configs" / "auto_response.cfg").is_file())
 
     def test_message_serializes_text_and_author(self):
         message = SimpleNamespace(
