@@ -896,7 +896,16 @@ def _handle_command(vertex: Any, command: dict[str, Any]) -> dict[str, Any]:
         ]
         if not category_lots:
             raise ValueError("В этой категории не найдено обычных лотов аккаунта")
-        wait_seconds = account.raise_lots(category_id)
+        subcategory_ids = sorted({
+            int(lot["subcategory_id"])
+            for lot in category_lots
+            if lot.get("subcategory_id") is not None
+        })
+        if not subcategory_ids:
+            raise ValueError(
+                "Не удалось определить подкатегории твоих лотов для безопасного поднятия."
+            )
+        wait_seconds = account.raise_lots(category_id, subcategories=subcategory_ids)
         return {
             "category_id": category_id,
             "category_name": category_lots[0].get("category_name") or f"Категория {category_id}",
