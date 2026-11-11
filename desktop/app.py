@@ -39,6 +39,9 @@ class DesktopWindow(QMainWindow):
         self._request_counter = 0
         self._selected_chat_id: str | None = None
         self._chats: dict[str, dict] = {}
+        self._orders_by_id: dict[str, dict] = {}
+        self._orders_cursor: str | None = None
+        self._orders_locale: str | None = None
         self._lots: dict[str, dict] = {}
         self._create_categories: list[dict] = []
         self._activity_history: list[tuple[str, str]] = []
@@ -168,8 +171,12 @@ class DesktopWindow(QMainWindow):
         order_toolbar.addWidget(self.orders_summary)
         order_toolbar.addStretch(1)
         refresh_orders = QPushButton("Обновить")
-        refresh_orders.clicked.connect(lambda: self._send_command("get_orders"))
+        refresh_orders.clicked.connect(self._refresh_orders)
         order_toolbar.addWidget(refresh_orders)
+        self.load_more_orders_button = QPushButton("Загрузить ещё")
+        self.load_more_orders_button.setEnabled(False)
+        self.load_more_orders_button.clicked.connect(self._load_more_orders)
+        order_toolbar.addWidget(self.load_more_orders_button)
         export_orders = QPushButton("Экспорт CSV")
         export_orders.clicked.connect(
             lambda: self._export_table_csv(self.order_table, "funpay_orders.csv")
@@ -615,7 +622,7 @@ class DesktopWindow(QMainWindow):
                 f"Подключено к аккаунту {username}. Загружено лотов: {message.get('lots_count', 0)}."
             )
             self._add_activity(f"Подключён аккаунт {username}")
-            self._send_command("get_orders")
+            self._refresh_orders()
             self._send_command("get_chats")
             self._send_command("get_settings")
             self._send_command("get_lots")
@@ -671,7 +678,13 @@ class DesktopWindow(QMainWindow):
         action = response.get("action")
         data = response.get("data", {})
         if action == "get_orders":
-            self._set_orders(data.get("orders", []))
+            self._orders_cursor = data.get("next_cursor")
+            self._orders_locale = data.get("locale") or self._orders_locale
+            self._set_orders(data.get("orders", []), append=bool(data.get("append")))
+            self.load_more_orders_button.setEnabled(bool(self._orders_cursor))
+            self.load_more_orders_button.setText(
+                "Загрузить ещё" if self._orders_cursor else "Старых заказов нет"
+            )
         elif action == "get_chats":
             self._set_chats(data.get("chats", []))
         elif action == "get_chat_history":
@@ -733,19 +746,48 @@ class DesktopWindow(QMainWindow):
                 chat_name=self._chats.get(self._selected_chat_id, {}).get("name", "")
             )
 
-    def _set_orders(self, orders: list[dict]) -> None:
-        self.order_table.setRowCount(len(orders))
-        for row, order in enumerate(orders):
+    def _refresh_orders(self) -> None:
+        self._orders_by_id.clear()
+        self._orders_cursor = None
+        self._orders_locale = None
+        self.load_more_orders_button.setEnabled(False)
+        self.load_more_orders_button.setText("Загрузить ещё")
+        self._set_orders([], append=False)
+        self._send_command("get_orders")
+
+    def _load_more_orders(self) -> None:
+        if not self._orders_cursor:
+            return
+        self.load_more_orders_button.setEnabled(False)
+        self.load_more_orders_button.setText("Загружаю...")
+        self._send_command(
+            "get_orders",
+            start_from=self._orders_cursor,
+            locale=self._orders_locale,
+        )
+
+    def _set_orders(self, orders: list[dict], append: bool = False) -> None:
+        if not append:
+            self._orders_by_id.clear()
+        for order in orders:
+            order_id = str(order.get("id", "")).lstrip("#")
+            if order_id:
+                self._orders_by_id[order_id] = order
+
+        self.order_table.setRowCount(len(self._orders_by_id))
+        for row, order in enumerate(self._orders_by_id.values()):
             amount = order.get("price")
             price = f"{amount} {order.get('currency', '')}" if amount is not None else ""
-            values = [order.get("id", ""), order.get("buyer", ""), order.get("description", ""),
-                      price, order.get("status", ""), order.get("date", "")]
+            values = [
+                order.get("id", ""), order.get("buyer", ""), order.get("description", ""),
+                price, order.get("status", ""), order.get("date", ""),
+            ]
             for column, value in enumerate(values):
                 item = QTableWidgetItem(str(value))
                 if column == 0:
                     item.setData(Qt.ItemDataRole.UserRole, order.get("chat_id"))
                 self.order_table.setItem(row, column, item)
-        self.orders_summary.setText(f"Загружено заказов: {len(orders)}")
+        self._filter_orders(self.order_search.text())
 
     def _set_lots(self, lots: list[dict]) -> None:
         self._lots = {str(lot.get("id")): lot for lot in lots if lot.get("id") is not None}
@@ -1266,25 +1308,11 @@ class DesktopWindow(QMainWindow):
                                 "\n".join(lines))
 
     def _upsert_order(self, order: dict) -> None:
-        order_id = str(order.get("id", ""))
+        order_id = str(order.get("id", "")).lstrip("#")
         if not order_id:
             return
-        target_row = None
-        for row in range(self.order_table.rowCount()):
-            item = self.order_table.item(row, 0)
-            if item and item.text() == order_id:
-                target_row = row
-                break
-        if target_row is None:
-            target_row = 0
-            self.order_table.insertRow(target_row)
-        price = order.get("price")
-        price_text = f"{price} {order.get('currency', '')}".strip() if price is not None else ""
-        values = [order_id, order.get("buyer", ""), order.get("description", ""),
-                  price_text, order.get("status", ""), order.get("date", "")]
-        for column, value in enumerate(values):
-            self.order_table.setItem(target_row, column, QTableWidgetItem(str(value)))
-        self.orders_summary.setText(f"Заказов в списке: {self.order_table.rowCount()}")
+        self._orders_by_id[order_id] = order
+        self._set_orders([order], append=True)
 
     def _set_chats(self, chats: list[dict]) -> None:
         selected = self._selected_chat_id
