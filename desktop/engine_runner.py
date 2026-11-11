@@ -157,8 +157,12 @@ def _refresh_profile(vertex: Any) -> list[dict[str, Any]]:
                     f"https://funpay.com/chips/offer?id={lot_id}",
             }
 
+    vertex.desktop_lots = lots_by_id
     if hasattr(vertex, "lots_ids"):
-        vertex.lots_ids = list(lots_by_id)
+        vertex.lots_ids = [
+            int(lot_id) if lot_id.isdecimal() else lot_id
+            for lot_id in lots_by_id
+        ]
     return list(lots_by_id.values())
 
 
@@ -316,13 +320,16 @@ def _handle_command(vertex: Any, command: dict[str, Any]) -> dict[str, Any]:
         lot_id = str(command.get("lot_id", "")).strip()
         if not lot_id:
             raise ValueError("Не указан ID лота")
-        profile = vertex.profile or account.get_user(account.id)
-        lot = profile.get_lot(lot_id)
-        if lot is None:
-            raise ValueError("Лот не найден в профиле. Обнови список лотов.")
-        is_currency = _value(getattr(lot.subcategory, "type", None)).upper() == "CURRENCY"
+        lot_data = getattr(vertex, "desktop_lots", {}).get(lot_id)
+        if lot_data is None:
+            _refresh_profile(vertex)
+            lot_data = getattr(vertex, "desktop_lots", {}).get(lot_id)
+        if lot_data is None:
+            raise ValueError("Лот не найден. Сначала обнови список лотов.")
+        is_currency = lot_data.get("subcategory_type") == "CURRENCY"
         if is_currency:
-            chip_fields = account.get_chip_fields(int(lot.subcategory.id))
+            subcategory_id = int(lot_data["subcategory_id"])
+            chip_fields = account.get_chip_fields(subcategory_id)
             chip_offer = chip_fields.chip_offers.get(str(lot_id))
             if chip_offer is None:
                 chip_offer = next(
@@ -351,16 +358,18 @@ def _handle_command(vertex: Any, command: dict[str, Any]) -> dict[str, Any]:
                 "auto_delivery": bool(fields.auto_delivery),
                 "is_currency": False,
             }
-        return {"lot": serialize_lot(lot), "editor": editor}
+        return {"lot": lot_data, "editor": editor}
 
     if action == "update_lot":
         lot_id = str(command.get("lot_id", "")).strip()
         if not lot_id:
             raise ValueError("Не указан ID лота")
-        profile = vertex.profile or account.get_user(account.id)
-        lot = profile.get_lot(lot_id)
-        if lot is None:
-            raise ValueError("Лот не найден в профиле. Обнови список лотов.")
+        lot_data = getattr(vertex, "desktop_lots", {}).get(lot_id)
+        if lot_data is None:
+            _refresh_profile(vertex)
+            lot_data = getattr(vertex, "desktop_lots", {}).get(lot_id)
+        if lot_data is None:
+            raise ValueError("Лот не найден. Сначала обнови список лотов.")
         values = command.get("values")
         if not isinstance(values, dict):
             raise ValueError("Не переданы новые значения лота")
@@ -384,9 +393,9 @@ def _handle_command(vertex: Any, command: dict[str, Any]) -> dict[str, Any]:
         if "active" in values and type(values["active"]) is not bool:
             raise ValueError("Статус активности должен быть логическим значением")
 
-        subcategory_type = _value(getattr(lot.subcategory, "type", None)).upper()
+        subcategory_type = lot_data.get("subcategory_type", "")
         if subcategory_type == "CURRENCY":
-            chip_fields = account.get_chip_fields(int(lot.subcategory.id))
+            chip_fields = account.get_chip_fields(int(lot_data["subcategory_id"]))
             chip_offer = chip_fields.chip_offers.get(str(lot_id))
             if chip_offer is None:
                 chip_offer = next(
@@ -428,11 +437,13 @@ def _handle_command(vertex: Any, command: dict[str, Any]) -> dict[str, Any]:
         lot_id = str(command.get("lot_id", "")).strip()
         if not lot_id:
             raise ValueError("Не указан ID лота")
-        profile = vertex.profile or account.get_user(account.id)
-        lot = profile.get_lot(lot_id)
-        if lot is None:
-            raise ValueError("Лот не найден в профиле. Обнови список лотов.")
-        if _value(getattr(lot.subcategory, "type", None)).upper() == "CURRENCY":
+        lot_data = getattr(vertex, "desktop_lots", {}).get(lot_id)
+        if lot_data is None:
+            _refresh_profile(vertex)
+            lot_data = getattr(vertex, "desktop_lots", {}).get(lot_id)
+        if lot_data is None:
+            raise ValueError("Лот не найден. Сначала обнови список лотов.")
+        if lot_data.get("subcategory_type") == "CURRENCY":
             raise ValueError("Удаление валютных предложений через этот экран пока не поддерживается.")
         account.delete_lot(int(lot_id))
         lots = _refresh_profile(vertex)
@@ -514,11 +525,27 @@ def _handle_command(vertex: Any, command: dict[str, Any]) -> dict[str, Any]:
         messages = account.get_chat_history(int(chat_id), interlocutor_username=chat_name)
         return {"chat_id": str(chat_id), "messages": [serialize_message(m) for m in messages]}
 
-    if action == "send_message":
+    if action in ("send_message", "send_image"):
         chat_id = command.get("chat_id")
         message_text = command.get("text", "")
-        if not chat_id or not isinstance(message_text, str) or not message_text.strip():
-            raise ValueError("Укажи чат и непустое сообщение")
+        image_path = command.get("image_path")
+        if not chat_id:
+            raise ValueError("Не указан чат")
+        if action == "send_message" and (
+            not isinstance(message_text, str) or not message_text.strip()
+        ):
+            raise ValueError("Сообщение не может быть пустым")
+        if action == "send_image":
+            if not isinstance(image_path, str) or not image_path.strip():
+                raise ValueError("Не выбран файл изображения")
+            from pathlib import Path
+            image = Path(image_path).expanduser().resolve()
+            if not image.is_file():
+                raise ValueError("Файл изображения не найден")
+            if image.suffix.lower() not in (".png", ".jpg", ".jpeg", ".gif", ".webp"):
+                raise ValueError("Поддерживаются изображения PNG, JPG, GIF и WEBP")
+            if image.stat().st_size > 10 * 1024 * 1024:
+                raise ValueError("Размер изображения не должен превышать 10 МБ")
         numeric_chat_id = int(chat_id)
         chat = account.get_chat_by_id(numeric_chat_id, make_request=False)
         chat_name = getattr(chat, "name", None) if chat else None
@@ -529,8 +556,12 @@ def _handle_command(vertex: Any, command: dict[str, Any]) -> dict[str, Any]:
             history = account.get_chat_history(numeric_chat_id, interlocutor_username=chat_name)
             if history:
                 interlocutor_id = history[-1].interlocutor_id
-        sent = account.send_message(numeric_chat_id, message_text, chat_name=chat_name,
-                                    interlocutor_id=interlocutor_id)
+        if action == "send_image":
+            sent = account.send_image(numeric_chat_id, str(image), chat_name=chat_name,
+                                      interlocutor_id=interlocutor_id)
+        else:
+            sent = account.send_message(numeric_chat_id, message_text, chat_name=chat_name,
+                                        interlocutor_id=interlocutor_id)
         return {"message": serialize_message(sent), "chat_id": str(chat_id)}
 
     raise ValueError(f"Неизвестная команда: {action}")
