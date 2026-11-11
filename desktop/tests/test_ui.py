@@ -110,7 +110,7 @@ class DesktopWindowSmokeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             path = root / "auto_response.cfg"
-            path.write_text("[command]\\nresponse: Hello\\n", encoding="utf-8")
+            path.write_text("[command]\nresponse: Hello\n", encoding="utf-8")
             submitted = []
             dialog = RuleConfigDialog(
                 "Test rules", "auto_response", path,
@@ -120,7 +120,7 @@ class DesktopWindowSmokeTests(unittest.TestCase):
                 self.assertIn("[command]", dialog.editor.toPlainText())
                 dialog._submit()
                 self.assertEqual(submitted, [
-                    ("auto_response", "[command]\\nresponse: Hello\\n")
+                    ("auto_response", "[command]\nresponse: Hello\n")
                 ])
                 self.assertFalse(dialog.save_button.isEnabled())
                 dialog.set_result(error="Response is required")
@@ -151,13 +151,13 @@ class DesktopWindowSmokeTests(unittest.TestCase):
                     "name": "blade_ball.txt", "bytes": 20,
                     "lines": 2, "products": 2,
                 },
-                "content": "item-1\\nitem-2\\n",
+                "content": "item-1\nitem-2\n",
             })
             self.assertEqual(dialog.filename_input.text(), "blade_ball.txt")
-            self.assertEqual(dialog.editor.toPlainText(), "item-1\\nitem-2\\n")
+            self.assertEqual(dialog.editor.toPlainText(), "item-1\nitem-2\n")
             dialog._save()
             self.assertEqual(
-                save_requests, [("blade_ball.txt", "item-1\\nitem-2\\n")]
+                save_requests, [("blade_ball.txt", "item-1\nitem-2\n")]
             )
             self.assertFalse(dialog.save_button.isEnabled())
             dialog.set_save_result({
