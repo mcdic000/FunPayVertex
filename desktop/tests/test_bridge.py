@@ -650,6 +650,7 @@ class DesktopBridgeSerializationTests(unittest.TestCase):
 
             calls = []
             fake_utils = ModuleType("Utils")
+            fake_utils.__path__ = []
             fake_logger = ModuleType("Utils.logger")
             fake_logger.configure_logging = lambda: calls.append("logging")
             fake_config = ModuleType("Utils.config_loader")
