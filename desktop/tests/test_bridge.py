@@ -27,6 +27,17 @@ class DesktopBridgeSerializationTests(unittest.TestCase):
         self.assertEqual(result["date"], "2026-11-11 12:34")
         self.assertEqual(result["chat_id"], "987")
 
+
+    def test_order_serializes_full_order_sum_when_price_is_not_present(self):
+        order = SimpleNamespace(
+            id="42", sum_=None, sum=19.75, buyer_username="buyer",
+            description=None, currency=SimpleNamespace(name="RUB"),
+            status=SimpleNamespace(name="CLOSED"), date=None, chat_id=5,
+        )
+        result = serialize_order(order)
+        self.assertEqual(result["price"], 19.75)
+        self.assertEqual(result["description"], "")
+
     def test_order_serializes_date_without_datetime_arguments(self):
         order = SimpleNamespace(
             id="1", buyer_username=None, description="", price=1,
