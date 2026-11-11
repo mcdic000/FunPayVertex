@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import sys
 import threading
@@ -326,6 +327,10 @@ def _collect_sales(
         locale = page_locale or locale
 
         if not page:
+            if next_cursor is not None and str(next_cursor) == cursor:
+                raise RuntimeError(
+                    "FunPay повторил курсор пагинации без новых заказов; остановил загрузку."
+                )
             next_id = next_cursor
             break
 
@@ -337,8 +342,9 @@ def _collect_sales(
                     seen_ids.add(order_id)
 
         if next_cursor is not None and str(next_cursor) == cursor:
-            next_id = next_cursor
-            break
+            raise RuntimeError(
+                "FunPay повторил курсор пагинации без перехода к следующей странице."
+            )
         next_id = next_cursor
 
     return orders, next_id, locale, bool(next_id)
@@ -549,17 +555,26 @@ def _handle_command(vertex: Any, command: dict[str, Any]) -> dict[str, Any]:
             if key in values and not isinstance(values[key], str):
                 raise ValueError(f"Поле {key} должно быть текстом")
         if "price" in values:
+            if isinstance(values["price"], bool):
+                raise ValueError("Цена должна быть числом")
             try:
                 price = float(values["price"])
             except (TypeError, ValueError):
                 raise ValueError("Цена должна быть числом")
+            if not math.isfinite(price):
+                raise ValueError("Цена должна быть конечным числом")
             if price <= 0:
                 raise ValueError("Цена должна быть больше нуля")
         if "amount" in values:
+            if isinstance(values["amount"], bool):
+                raise ValueError("Количество должно быть целым числом")
             try:
-                amount = int(values["amount"])
+                raw_amount = float(values["amount"])
             except (TypeError, ValueError):
                 raise ValueError("Количество должно быть целым числом")
+            if not math.isfinite(raw_amount) or not raw_amount.is_integer():
+                raise ValueError("Количество должно быть целым числом")
+            amount = int(raw_amount)
             if amount < 0:
                 raise ValueError("Количество не может быть отрицательным")
         if "active" in values and type(values["active"]) is not bool:
@@ -626,10 +641,16 @@ def _handle_command(vertex: Any, command: dict[str, Any]) -> dict[str, Any]:
         }
 
     if action == "raise_category":
+        raw_category_id = command.get("category_id")
+        if isinstance(raw_category_id, bool):
+            raise ValueError("Выбери корректную категорию")
         try:
-            category_id = int(command.get("category_id"))
+            numeric_category_id = float(raw_category_id)
         except (TypeError, ValueError):
             raise ValueError("Выбери корректную категорию")
+        if not math.isfinite(numeric_category_id) or not numeric_category_id.is_integer():
+            raise ValueError("Выбери корректную категорию")
+        category_id = int(numeric_category_id)
         lots = getattr(vertex, "desktop_lots", {})
         category_lots = [
             lot for lot in lots.values()
