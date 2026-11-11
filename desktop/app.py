@@ -161,7 +161,7 @@ class ProductFilesDialog(QDialog):
         self.meta.setText("Обновляю список файлов...")
         self.read_callback(None)
 
-    def set_files(self, files: list[dict]) -> None:
+    def set_files(self, files: list[dict], load_selected: bool = True) -> None:
         selected = self._current_filename
         self.file_list.blockSignals(True)
         self.file_list.clear()
@@ -183,6 +183,8 @@ class ProductFilesDialog(QDialog):
         if selected and self.file_list.currentItem() is None:
             self._current_filename = None
         self.meta.setText(f"Файлов товаров: {len(files)}")
+        if load_selected and self.file_list.currentItem() is not None:
+            self._on_selected(self.file_list.currentItem())
 
     def _on_selected(
         self, current: QListWidgetItem | None, _previous: QListWidgetItem | None = None
@@ -239,7 +241,7 @@ class ProductFilesDialog(QDialog):
         result = (data or {}).get("file", {})
         files = (data or {}).get("files", [])
         self._current_filename = str(result.get("name", "")) or None
-        self.set_files(files)
+        self.set_files(files, load_selected=False)
         self.editor.document().setModified(False)
         backup = result.get("backup")
         backup_text = f" Резервная копия: {backup}." if backup else " Создан новый файл."
