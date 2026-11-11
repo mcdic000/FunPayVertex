@@ -667,7 +667,11 @@ class DesktopWindow(QMainWindow):
             action = response.get("action")
             error = response.get("error", "неизвестная ошибка")
             self._add_activity(f"Ошибка {action}: {error}")
-            if action in ("get_lot_editor", "update_lot", "delete_lot"):
+            if action == "get_orders":
+                self.load_more_orders_button.setEnabled(bool(self._orders_cursor))
+                self.load_more_orders_button.setText("Загрузить ещё")
+                self.orders_summary.setText(f"Не удалось загрузить заказы: {error}")
+            elif action in ("get_lot_editor", "update_lot", "delete_lot"):
                 self.lot_status.setText(f"Ошибка работы с лотом: {error}")
             elif action == "update_preferences":
                 self.preferences_status.setText(f"Не удалось сохранить настройки: {error}")
