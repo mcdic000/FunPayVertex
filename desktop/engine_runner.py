@@ -70,6 +70,7 @@ def serialize_message(message: Any) -> dict[str, Any]:
 
 def serialize_lot(lot: Any) -> dict[str, Any]:
     subcategory = getattr(lot, "subcategory", None)
+    category = getattr(subcategory, "category", None)
     return {
         "id": str(getattr(lot, "id", "")),
         "title": getattr(lot, "description", None) or getattr(lot, "title", None) or "",
@@ -87,6 +88,8 @@ def serialize_lot(lot: Any) -> dict[str, Any]:
         ),
         "subcategory_id": getattr(subcategory, "id", None),
         "subcategory_type": _value(getattr(subcategory, "type", None)).upper(),
+        "category_id": getattr(category, "id", None),
+        "category_name": getattr(category, "name", None) or "",
         "public_link": getattr(lot, "public_link", "") or "",
     }
 
@@ -153,6 +156,8 @@ def _refresh_profile(vertex: Any) -> list[dict[str, Any]]:
                     getattr(subcategory, "name", None) or "Валюта",
                 "subcategory_id": subcategory_id,
                 "subcategory_type": "CURRENCY",
+                "category_id": getattr(getattr(subcategory, "category", None), "id", None),
+                "category_name": getattr(getattr(subcategory, "category", None), "name", "") or "",
                 "public_link": current.get("public_link") or
                     f"https://funpay.com/chips/offer?id={lot_id}",
             }
@@ -471,6 +476,27 @@ def _handle_command(vertex: Any, command: dict[str, Any]) -> dict[str, Any]:
 
         lots = _refresh_profile(vertex)
         return {"lots": lots, "count": len(lots), "saved_lot_id": lot_id}
+
+    if action == "raise_category":
+        try:
+            category_id = int(command.get("category_id"))
+        except (TypeError, ValueError):
+            raise ValueError("Выбери корректную категорию")
+        lots = getattr(vertex, "desktop_lots", {})
+        category_lots = [
+            lot for lot in lots.values()
+            if lot.get("subcategory_type") == "COMMON"
+            and lot.get("category_id") is not None
+            and int(lot["category_id"]) == category_id
+        ]
+        if not category_lots:
+            raise ValueError("В этой категории не найдено обычных лотов аккаунта")
+        wait_seconds = account.raise_lots(category_id)
+        return {
+            "category_id": category_id,
+            "category_name": category_lots[0].get("category_name") or f"Категория {category_id}",
+            "wait_seconds": wait_seconds,
+        }
 
     if action == "delete_lot":
         lot_id = str(command.get("lot_id", "")).strip()
