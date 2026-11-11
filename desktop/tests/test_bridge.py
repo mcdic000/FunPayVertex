@@ -164,6 +164,18 @@ class DesktopBridgeSerializationTests(unittest.TestCase):
         self.assertEqual(result["reply"], "Thank you!")
         self.assertTrue(result["updated"])
 
+        rating_only_review = SimpleNamespace(text="", reply="")
+        vertex.account.get_order = lambda *_args, **_kwargs: SimpleNamespace(
+            review=rating_only_review
+        )
+        second = _handle_command(vertex, {
+            "action": "send_review_reply",
+            "order_id": "989",
+            "text": "Thanks for the rating!",
+        })
+        self.assertEqual(sent[-1], ("989", "Thanks for the rating!"))
+        self.assertFalse(second["updated"])
+
         vertex.account.get_order = lambda *_args, **_kwargs: SimpleNamespace(review=None)
         with self.assertRaisesRegex(ValueError, "нет отзыва"):
             _handle_command(vertex, {
