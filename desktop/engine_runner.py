@@ -133,6 +133,30 @@ def _handle_command(vertex: Any, command: dict[str, Any]) -> dict[str, Any]:
         )
         return {"orders": [serialize_order(order) for order in orders]}
 
+    if action == "get_settings":
+        funpay_config = vertex.MAIN_CFG["FunPay"]
+        return {
+            "auto_delivery": funpay_config.getboolean("autoDelivery"),
+            "auto_response": funpay_config.getboolean("autoResponse"),
+            "auto_raise": funpay_config.getboolean("autoRaise"),
+        }
+
+    if action == "update_automation_settings":
+        settings = command.get("settings")
+        if not isinstance(settings, dict):
+            raise ValueError("Не переданы настройки автоматизаций")
+        allowed = {"autoDelivery", "autoResponse", "autoRaise"}
+        if set(settings) - allowed or any(type(value) is not bool for value in settings.values()):
+            raise ValueError("Недопустимые параметры автоматизаций")
+        for key, value in settings.items():
+            vertex.MAIN_CFG["FunPay"][key] = "1" if value else "0"
+        vertex.save_config(vertex.MAIN_CFG, "configs/_main.cfg")
+        return {
+            "auto_delivery": vertex.MAIN_CFG["FunPay"].getboolean("autoDelivery"),
+            "auto_response": vertex.MAIN_CFG["FunPay"].getboolean("autoResponse"),
+            "auto_raise": vertex.MAIN_CFG["FunPay"].getboolean("autoRaise"),
+        }
+
     if action == "get_order_details":
         order_id = str(command.get("order_id", "")).lstrip("#")
         if not order_id:
