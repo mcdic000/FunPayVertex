@@ -13,8 +13,8 @@ from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
     QDoubleSpinBox, QFormLayout, QFrame, QHBoxLayout, QHeaderView, QLabel,
     QFileDialog, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QScrollArea,
-    QPushButton, QSpinBox, QStackedWidget, QTableWidget, QTableWidgetItem,
-    QTextEdit, QVBoxLayout, QWidget,
+    QPushButton, QSpinBox, QStackedWidget, QStyle, QSystemTrayIcon,
+    QTableWidget, QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget,
 )
 
 
@@ -38,6 +38,7 @@ class DesktopWindow(QMainWindow):
         self._closing = False
         self._request_counter = 0
         self._selected_chat_id: str | None = None
+        self._account_id: str | None = None
         self._chats: dict[str, dict] = {}
         self._orders_by_id: dict[str, dict] = {}
         self._orders_cursor: str | None = None
@@ -124,6 +125,20 @@ class DesktopWindow(QMainWindow):
         self.navigation.currentRowChanged.connect(self._change_title)
         self.navigation.setCurrentRow(0)
         self._apply_style()
+        self.tray_icon: QSystemTrayIcon | None = None
+        if QSystemTrayIcon.isSystemTrayAvailable():
+            self.tray_icon = QSystemTrayIcon(
+                self.style().standardIcon(QStyle.StandardPixmap.SP_ComputerIcon), self
+            )
+            self.tray_icon.setToolTip("FunPay Assistant")
+            self.tray_icon.show()
+        self.desktop_toast_check.setEnabled(self.tray_icon is not None)
+        if self.tray_icon is None:
+            self.desktop_toast_check.setChecked(False)
+            self.desktop_toast_check.setToolTip(
+                "Системная область уведомлений недоступна в этом сеансе Windows."
+            )
+        self._load_activity_history()
 
     def _panel(self, title: str, description: str = "") -> tuple[QFrame, QVBoxLayout]:
         panel = QFrame()
@@ -432,6 +447,12 @@ class DesktopWindow(QMainWindow):
         clear_notifications.clicked.connect(self._clear_notifications)
         notifications_toolbar.addWidget(clear_notifications)
         notifications_box.addLayout(notifications_toolbar)
+        self.desktop_toast_check = QCheckBox("Показывать всплывающие уведомления Windows")
+        self.desktop_toast_check.setChecked(True)
+        self.desktop_toast_check.setToolTip(
+            "Уведомления выводятся для новых заказов, смены статуса заказа и входящих сообщений."
+        )
+        notifications_box.addWidget(self.desktop_toast_check)
         self.notifications_list = QListWidget()
         self.notifications_list.setObjectName("activityList")
         notifications_box.addWidget(self.notifications_list, 1)
@@ -632,6 +653,7 @@ class DesktopWindow(QMainWindow):
             self.engine_details.setText("Vertex загружается и подключается к FunPay...")
         elif kind == "connected":
             username = message.get("username") or "FunPay"
+            self._account_id = str(message.get("account_id") or "") or None
             self.connection_badge.setText(f"● {username}")
             self.engine_details.setText(
                 f"Подключено к аккаунту {username}. Загружено лотов: {message.get('lots_count', 0)}."
@@ -649,6 +671,7 @@ class DesktopWindow(QMainWindow):
             self.engine_details.setText(message.get("message", "Сначала настрой Vertex."))
         elif kind == "engine_error":
             self.connection_badge.setText("● Ошибка подключения")
+            self._notify_desktop("Ошибка подключения FunPay", message.get("message", "Проверь настройки Vertex."))
             self.engine_details.setText(message.get("message", "Ошибка запуска движка."))
             self._add_activity("Ошибка запуска движка; подробности в logs/log.log")
         elif kind == "activity":
@@ -661,14 +684,38 @@ class DesktopWindow(QMainWindow):
             elif message.get("target") == "analytics":
                 self._refresh_analytics()
         elif kind == "order_event":
-            self._add_activity(f"{message.get('event', 'Заказ')}: #{message.get('order', {}).get('id', '')}")
-            self._upsert_order(message.get("order", {}))
+            event_name = str(message.get("event", "Заказ"))
+            order = message.get("order", {})
+            self._add_activity(f"{event_name}: #{order.get('id', '')}")
+            if event_name == "NewOrderEvent":
+                self._notify_desktop(
+                    "Новый заказ",
+                    f"#{order.get('id', '')} · {order.get('buyer', 'Покупатель')}",
+                )
+            elif event_name == "OrderStatusChangedEvent":
+                self._notify_desktop(
+                    "Изменился статус заказа",
+                    f"#{order.get('id', '')} · {order.get('status', '')}",
+                )
+            self._upsert_order(order)
         elif kind == "chat_event":
             self._upsert_chat(message.get("chat", {}))
         elif kind == "message_event":
-            self._add_activity(f"Новое сообщение: {message.get('chat_name') or 'чат'}")
+            chat_name = message.get("chat_name") or "чат"
+            message_data = message.get("message", {})
+            self._add_activity(f"Новое сообщение: {chat_name}")
+            author_id = message_data.get("author_id")
+            incoming = (
+                author_id is not None
+                and (self._account_id is None or str(author_id) != self._account_id)
+                and not message_data.get("by_bot")
+                and not message_data.get("by_vertex")
+            )
+            if incoming:
+                preview = message_data.get("text") or "Отправлено изображение"
+                self._notify_desktop("Новое сообщение", f"{chat_name}: {preview[:120]}")
             if str(message.get("chat_id")) == self._selected_chat_id:
-                self._append_message(message.get("message", {}))
+                self._append_message(message_data)
         elif kind == "response":
             self._handle_response(message)
 
@@ -1337,10 +1384,66 @@ class DesktopWindow(QMainWindow):
             self, "Экспорт завершён", f"Таблица сохранена в файл:\n{path}"
         )
 
+    def _activity_log_path(self) -> Path:
+        return self.project_root / "storage" / "desktop_events.jsonl"
+
+    def _load_activity_history(self) -> None:
+        path = self._activity_log_path()
+        try:
+            if not path.is_file():
+                return
+            entries = []
+            for line in path.read_text(encoding="utf-8").splitlines()[-250:]:
+                try:
+                    item = json.loads(line)
+                    timestamp = str(item.get("time", ""))
+                    message = str(item.get("message", ""))
+                    if timestamp and message:
+                        entries.append((timestamp, message))
+                except (json.JSONDecodeError, AttributeError, TypeError):
+                    continue
+            self._activity_history = list(reversed(entries))[:250]
+            for timestamp, message in reversed(self._activity_history):
+                entry = f"{timestamp}  ·  {message}"
+                self.notifications_list.insertItem(0, entry)
+                if self.activity_list.count() < 60:
+                    self.activity_list.insertItem(0, entry)
+            self.notifications_summary.setText(
+                f"Событий в журнале: {len(self._activity_history)}"
+            )
+        except OSError:
+            self.notifications_summary.setText("Не удалось прочитать локальный журнал событий.")
+
+    def _persist_activity_history(self) -> None:
+        path = self._activity_log_path()
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            lines = [
+                json.dumps({"time": timestamp, "message": message}, ensure_ascii=False)
+                for timestamp, message in reversed(self._activity_history[:250])
+            ]
+            path.write_text("\\n".join(lines) + ("\\n" if lines else ""), encoding="utf-8")
+        except OSError:
+            # A full disk or read-only folder must not break incoming chat/order events.
+            pass
+
+    def _notify_desktop(self, title: str, message: str) -> None:
+        if (
+            self.tray_icon is not None
+            and self.desktop_toast_check.isChecked()
+            and QSystemTrayIcon.supportsMessages()
+        ):
+            self.tray_icon.showMessage(
+                title[:80], message[:240],
+                QSystemTrayIcon.MessageIcon.Information, 5000
+            )
+
     def _clear_notifications(self) -> None:
         self._activity_history.clear()
         self.notifications_list.clear()
+        self.activity_list.clear()
         self.notifications_summary.setText("Журнал очищен")
+        self._persist_activity_history()
 
     def _save_automation_settings(self) -> None:
         if self.engine_process.state() != QProcess.ProcessState.Running:
@@ -1523,7 +1626,7 @@ class DesktopWindow(QMainWindow):
             )
 
     def _add_activity(self, text: str) -> None:
-        timestamp = datetime.now().strftime("%H:%M:%S")
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         entry = f"{timestamp}  ·  {text}"
         self.activity_list.insertItem(0, entry)
         while self.activity_list.count() > 60:
@@ -1534,10 +1637,13 @@ class DesktopWindow(QMainWindow):
             self.notifications_list.insertItem(0, entry)
             while self.notifications_list.count() > 250:
                 self.notifications_list.takeItem(self.notifications_list.count() - 1)
-            self.notifications_summary.setText(f"Событий в этом сеансе: {len(self._activity_history)}")
+            self.notifications_summary.setText(f"Событий в журнале: {len(self._activity_history)}")
+        self._persist_activity_history()
 
     def closeEvent(self, event) -> None:
         self._closing = True
+        if self.tray_icon is not None:
+            self.tray_icon.hide()
         if self.engine_process.state() != QProcess.ProcessState.NotRunning:
             self.engine_process.kill()
             self.engine_process.waitForFinished(1200)
