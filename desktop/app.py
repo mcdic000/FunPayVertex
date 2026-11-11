@@ -100,16 +100,18 @@ class DesktopWindow(QMainWindow):
         root_layout.addWidget(content, 1)
         self.setCentralWidget(root)
 
-        self.navigation.currentRowChanged.connect(self.pages.setCurrentIndex)
-        self.navigation.currentRowChanged.connect(self._change_title)
-        self.navigation.setCurrentRow(0)
-
+        # Create the process controller before selecting the initial navigation row:
+        # currentRowChanged invokes _change_title synchronously.
         self.engine_process = QProcess(self)
         self.engine_process.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
         self.engine_process.readyReadStandardOutput.connect(self._read_engine_output)
         self.engine_process.started.connect(self._on_engine_started)
         self.engine_process.finished.connect(self._on_engine_finished)
         self.engine_process.errorOccurred.connect(self._on_engine_error)
+
+        self.navigation.currentRowChanged.connect(self.pages.setCurrentIndex)
+        self.navigation.currentRowChanged.connect(self._change_title)
+        self.navigation.setCurrentRow(0)
         self._apply_style()
 
     def _panel(self, title: str, description: str = "") -> tuple[QFrame, QVBoxLayout]:
