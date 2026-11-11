@@ -96,6 +96,46 @@ def _serialize_create_categories(sorted_subcategories: dict[Any, Any]) -> list[d
     return categories
 
 
+def _prepare_image_payload(image_path: str, max_bytes: int = 10 * 1024 * 1024) -> bytes:
+    """Validate and normalize a supported image to PNG bytes for Vertex's uploader."""
+    from io import BytesIO
+    from pathlib import Path
+    from PIL import Image, UnidentifiedImageError
+
+    path = Path(image_path).expanduser().resolve()
+    if not path.is_file():
+        raise ValueError("Файл изображения не найден")
+    if path.suffix.lower() not in (".png", ".jpg", ".jpeg", ".gif", ".webp"):
+        raise ValueError("Поддерживаются изображения PNG, JPG, GIF и WEBP")
+    if path.stat().st_size > max_bytes:
+        raise ValueError("Размер изображения не должен превышать 10 МБ")
+
+    try:
+        with Image.open(path) as source:
+            if source.width <= 0 or source.height <= 0:
+                raise ValueError("Некорректные размеры изображения")
+            if source.width * source.height > 25_000_000:
+                raise ValueError("Изображение слишком большое по разрешению (максимум 25 Мп)")
+            # FunPayAPI.upload_image labels its multipart payload as image/png.
+            # Normalize JPEG/WEBP/GIF so the bytes and MIME type always agree.
+            source.seek(0)
+            if source.format == "PNG":
+                payload = path.read_bytes()
+            else:
+                frame = source.convert("RGBA" if "A" in source.getbands() else "RGB")
+                buffer = BytesIO()
+                frame.save(buffer, format="PNG", optimize=True)
+                payload = buffer.getvalue()
+    except (UnidentifiedImageError, OSError) as exc:
+        raise ValueError("Не удалось прочитать изображение. Выбери корректный PNG, JPG, GIF или WEBP.") from exc
+
+    if len(payload) > max_bytes:
+        raise ValueError(
+            "После преобразования PNG превышает 10 МБ. Уменьши изображение и попробуй снова."
+        )
+    return payload
+
+
 def _currency_editor_payload(lot_data: dict[str, Any], chip_offer: Any) -> dict[str, Any]:
     return {
         "title": lot_data.get("title") or "Валютное предложение",
@@ -578,7 +618,7 @@ def _handle_command(vertex: Any, command: dict[str, Any]) -> dict[str, Any]:
         return {
             "order_id": order_id,
             "reply": reply_text.strip(),
-            "updated": bool(getattr(review, "reply", None)),
+            "updated": True,
         }
 
     if action == "raise_category":
@@ -720,17 +760,11 @@ def _handle_command(vertex: Any, command: dict[str, Any]) -> dict[str, Any]:
             not isinstance(message_text, str) or not message_text.strip()
         ):
             raise ValueError("Сообщение не может быть пустым")
+        image_payload = None
         if action == "send_image":
             if not isinstance(image_path, str) or not image_path.strip():
                 raise ValueError("Не выбран файл изображения")
-            from pathlib import Path
-            image = Path(image_path).expanduser().resolve()
-            if not image.is_file():
-                raise ValueError("Файл изображения не найден")
-            if image.suffix.lower() not in (".png", ".jpg", ".jpeg", ".gif", ".webp"):
-                raise ValueError("Поддерживаются изображения PNG, JPG, GIF и WEBP")
-            if image.stat().st_size > 10 * 1024 * 1024:
-                raise ValueError("Размер изображения не должен превышать 10 МБ")
+            image_payload = _prepare_image_payload(image_path)
         numeric_chat_id = int(chat_id)
         chat = account.get_chat_by_id(numeric_chat_id, make_request=False)
         chat_name = getattr(chat, "name", None) if chat else None
@@ -742,7 +776,7 @@ def _handle_command(vertex: Any, command: dict[str, Any]) -> dict[str, Any]:
             if history:
                 interlocutor_id = history[-1].interlocutor_id
         if action == "send_image":
-            sent = account.send_image(numeric_chat_id, str(image), chat_name=chat_name,
+            sent = account.send_image(numeric_chat_id, image_payload, chat_name=chat_name,
                                       interlocutor_id=interlocutor_id)
         else:
             sent = account.send_message(numeric_chat_id, message_text, chat_name=chat_name,
