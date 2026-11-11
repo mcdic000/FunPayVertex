@@ -1022,10 +1022,10 @@ class DesktopBridgeSerializationTests(unittest.TestCase):
                 (root / "storage").symlink_to(external, target_is_directory=True)
             except (OSError, NotImplementedError) as exc:
                 self.skipTest(f"Windows runner does not permit symlink creation: {exc}")
-            with self.assertRaisesRegex(ValueError, "символическими ссылками"):
+            with self.assertRaisesRegex(ValueError, "Символические ссылки"):
                 _stock_file_path(root, "stock.txt")
             self.assertFalse((external / "products").exists())
-            with self.assertRaisesRegex(ValueError, "символическими ссылками"):
+            with self.assertRaisesRegex(ValueError, "Символические ссылки"):
                 _list_product_files(root)
             self.assertFalse((external / "products").exists())
 
@@ -1042,7 +1042,7 @@ class DesktopBridgeSerializationTests(unittest.TestCase):
             target = products / "stock.txt"
             target.write_text("original\n", encoding="utf-8")
 
-            with self.assertRaisesRegex(ValueError, "символическими ссылками"):
+            with self.assertRaisesRegex(ValueError, "Символические ссылки"):
                 _save_product_file(root, "stock.txt", "replacement\n")
 
             self.assertEqual(target.read_text(encoding="utf-8"), "original\n")
@@ -1056,7 +1056,7 @@ class DesktopBridgeSerializationTests(unittest.TestCase):
             external.mkdir()
             (root / "configs").symlink_to(external, target_is_directory=True)
 
-            with self.assertRaisesRegex(ValueError, "символическими ссылками"):
+            with self.assertRaisesRegex(ValueError, "Символические ссылки"):
                 _save_rule_config(
                     SimpleNamespace(), root, "auto_response",
                     "[test]\nresponse: safe\n",
