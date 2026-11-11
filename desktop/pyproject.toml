@@ -1,0 +1,15 @@
+[project]
+name = "funpay-assistant-desktop"
+version = "0.1.0"
+description = "Desktop interface for FunPay Vertex"
+requires-python = ">=3.11"
+dependencies = [
+    "PySide6>=6.7,<7",
+    "keyring>=25,<26",
+]
+
+[project.scripts]
+funpay-assistant = "desktop.app:main"
+
+[tool.setuptools]
+packages = ["desktop"]
