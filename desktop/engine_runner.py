@@ -781,6 +781,7 @@ def main() -> int:
         lots_count = len(profile.get_lots()) if profile else 0
         emit({"type": "connected",
               "username": getattr(vertex.account, "username", None) or "FunPay",
+              "account_id": getattr(vertex.account, "id", None),
               "lots_count": lots_count})
 
         threading.Thread(target=_command_loop, args=(vertex,), daemon=True,
