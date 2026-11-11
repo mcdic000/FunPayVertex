@@ -3,7 +3,8 @@ from datetime import date, datetime
 from types import SimpleNamespace
 
 from desktop.engine_runner import (
-    _order_analytics, serialize_chat, serialize_lot, serialize_message, serialize_order,
+    _collect_sales, _order_analytics, _refresh_profile, serialize_chat, serialize_lot,
+    serialize_message, serialize_order,
 )
 
 
@@ -83,6 +84,92 @@ class DesktopBridgeSerializationTests(unittest.TestCase):
         self.assertEqual(result["daily"][0]["date"], "2026-11-11")
         self.assertEqual(result["daily"][0]["orders"], 2)
         self.assertEqual(result["daily"][0]["amount"], 25.5)
+
+
+    def test_refresh_profile_includes_private_paused_lots_and_currency_offers(self):
+        common = SimpleNamespace(id=50, name="Game items", fullname="Game / Items",
+                                 type=SimpleNamespace(name="COMMON"))
+        currency = SimpleNamespace(id=88, name="Coins", fullname="Game / Coins",
+                                    type=SimpleNamespace(name="CURRENCY"))
+        public_common = SimpleNamespace(
+            id=100, description="Active item", title="Active item", server="", side="",
+            amount=1, price=10.0, currency=SimpleNamespace(name="BYN"), active=True,
+            auto=False, subcategory=common, public_link="https://funpay.com/lots/offer?id=100",
+        )
+        public_currency = SimpleNamespace(
+            id="1-2-88-1", description="Coins", title="Coins", server="", side="",
+            amount=2, price=4.0, currency=SimpleNamespace(name="BYN"), active=True,
+            auto=False, subcategory=currency,
+            public_link="https://funpay.com/chips/offer?id=1-2-88-1",
+        )
+        paused_lot = SimpleNamespace(
+            id=101, description="Paused item", title="Paused item", server="", side="",
+            amount=0, price=12.0, currency=SimpleNamespace(name="BYN"), active=False,
+            auto=False, subcategory=common, public_link="https://funpay.com/lots/offer?id=101",
+        )
+
+        class Profile:
+            def get_lots(self):
+                return [public_common, public_currency]
+
+        class FakeAccount:
+            id = 1
+            currency = SimpleNamespace(name="BYN")
+
+            def get_user(self, _user_id):
+                return Profile()
+
+            def get_my_subcategory_lots(self, subcategory_id):
+                self.requested_subcategory = subcategory_id
+                return [paused_lot]
+
+            def get_chip_fields(self, subcategory_id):
+                self.requested_chip_subcategory = subcategory_id
+                offer = SimpleNamespace(
+                    lot_id="1-2-88-2", amount=7, price=9.5, active=False
+                )
+                return SimpleNamespace(chip_offers={"1-2-88-2": offer})
+
+        account = FakeAccount()
+        vertex = SimpleNamespace(
+            account=account, profile=None, curr_profile=None, lots_ids=[]
+        )
+        result = _refresh_profile(vertex)
+        by_id = {lot["id"]: lot for lot in result}
+
+        self.assertIn("100", by_id)
+        self.assertIn("101", by_id)
+        self.assertIn("1-2-88-1", by_id)
+        self.assertIn("1-2-88-2", by_id)
+        self.assertFalse(by_id["101"]["active"])
+        self.assertFalse(by_id["1-2-88-2"]["active"])
+        self.assertEqual(account.requested_subcategory, 50)
+        self.assertEqual(account.requested_chip_subcategory, 88)
+        self.assertIn(101, vertex.lots_ids)
+        self.assertIn(100, vertex.lots_ids)
+        self.assertIn("1-2-88-2", vertex.desktop_lots)
+
+    def test_collect_sales_follows_cursor_and_deduplicates(self):
+        first = SimpleNamespace(id="1", price=3.0)
+        second = SimpleNamespace(id="2", price=4.0)
+        third = SimpleNamespace(id="3", price=5.0)
+
+        class FakeAccount:
+            calls = []
+
+            def get_sales(self, start_from=None, **_kwargs):
+                self.calls.append(start_from)
+                if start_from is None:
+                    return "2", [first, second], "ru", {}
+                if start_from == "2":
+                    return None, [second, third], "ru", {}
+                raise AssertionError(f"Unexpected cursor: {start_from}")
+
+        account = FakeAccount()
+        orders, has_more = _collect_sales(account, max_pages=10)
+        self.assertEqual([order.id for order in orders], ["1", "2", "3"])
+        self.assertFalse(has_more)
+        self.assertEqual(account.calls, [None, "2"])
 
     def test_message_serializes_text_and_author(self):
         message = SimpleNamespace(
