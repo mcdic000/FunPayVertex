@@ -572,7 +572,7 @@ def _handle_command(vertex: Any, command: dict[str, Any]) -> dict[str, Any]:
             raise ValueError("Ответ на отзыв слишком длинный (максимум 4000 символов)")
         order = account.get_order(order_id, include_review=True)
         review = getattr(order, "review", None)
-        if review is None or not getattr(review, "text", None):
+        if review is None:
             raise ValueError("У этого заказа пока нет отзыва, на который можно ответить")
         account.send_review(order_id, reply_text.strip())
         return {
