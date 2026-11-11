@@ -47,6 +47,64 @@ class DesktopWindowSmokeTests(unittest.TestCase):
                     second.close()
                 first.close()
 
+
+    def test_order_pages_merge_without_duplicates_and_refresh_existing_rows(self):
+        window = DesktopWindow()
+        try:
+            window._set_orders([
+                {"id": "100", "buyer": "Buyer A", "description": "Old title",
+                 "price": 2.0, "currency": "BYN", "status": "PAID", "date": "2026-11-11"},
+            ])
+            window._set_orders([
+                {"id": "101", "buyer": "Buyer B", "description": "Second order",
+                 "price": 3.0, "currency": "BYN", "status": "CLOSED", "date": "2026-11-10"},
+            ], append=True)
+            window._upsert_order(
+                {"id": "100", "buyer": "Buyer A", "description": "Updated title",
+                 "price": 2.5, "currency": "BYN", "status": "CLOSED", "date": "2026-11-11"}
+            )
+            self.assertEqual(window.order_table.rowCount(), 2)
+            rows = {
+                window.order_table.item(row, 0).text(): row
+                for row in range(window.order_table.rowCount())
+            }
+            self.assertEqual(
+                window.order_table.item(rows["100"], 2).text(), "Updated title"
+            )
+            self.assertEqual(
+                window.order_table.item(rows["100"], 3).text(), "2.5 BYN"
+            )
+        finally:
+            window.close()
+
+    def test_analytics_pages_accumulate_daily_totals_and_statuses(self):
+        window = DesktopWindow()
+        try:
+            window._render_analytics({
+                "orders_count": 2,
+                "gross_total": 25.5,
+                "status_counts": {"PAID": 1, "CLOSED": 1},
+                "daily": [{"date": "2026-11-11", "orders": 2, "amount": 25.5}],
+                "has_more": True,
+            })
+            window._render_analytics({
+                "orders_count": 1,
+                "gross_total": 7.0,
+                "status_counts": {"REFUNDED": 1},
+                "daily": [{"date": "2026-11-11", "orders": 1, "amount": 7.0}],
+                "has_more": False,
+            }, append=True)
+            self.assertIn("Загружено продаж: 3", window.analytics_summary.text())
+            self.assertIn("Сумма цен: 32.50", window.analytics_summary.text())
+            self.assertIn("CLOSED: 1", window.analytics_summary.text())
+            self.assertIn("PAID: 1", window.analytics_summary.text())
+            self.assertIn("REFUNDED: 1", window.analytics_summary.text())
+            self.assertEqual(window.analytics_table.rowCount(), 1)
+            self.assertEqual(window.analytics_table.item(0, 1).text(), "3")
+            self.assertEqual(window.analytics_table.item(0, 2).text(), "32.50")
+        finally:
+            window.close()
+
     def test_window_builds_all_pages_and_initial_state(self):
         window = DesktopWindow()
         try:
