@@ -92,13 +92,32 @@ def serialize_lot(lot: Any) -> dict[str, Any]:
 
 
 def _refresh_profile(vertex: Any) -> list[dict[str, Any]]:
-    profile = vertex.account.get_user(vertex.account.id)
+    """Refresh the public profile and enrich it with the owner's private trade pages."""
+    account = vertex.account
+    profile = account.get_user(account.id)
     vertex.profile = profile
     if hasattr(vertex, "curr_profile"):
         vertex.curr_profile = profile
+
+    lots_by_id = {str(lot.id): serialize_lot(lot) for lot in profile.get_lots()}
+    common_subcategories = {
+        int(lot.subcategory.id)
+        for lot in profile.get_lots()
+        if getattr(getattr(lot, "subcategory", None), "type", None) is not None
+        and _value(lot.subcategory.type).upper() == "COMMON"
+    }
+    # Private trade pages also show paused common lots.
+    for subcategory_id in sorted(common_subcategories):
+        try:
+            owned_lots = account.get_my_subcategory_lots(subcategory_id)
+        except Exception:
+            continue
+        for lot in owned_lots:
+            lots_by_id[str(lot.id)] = serialize_lot(lot)
+
     if hasattr(vertex, "lots_ids"):
-        vertex.lots_ids = [lot.id for lot in profile.get_lots()]
-    return [serialize_lot(lot) for lot in profile.get_lots()]
+        vertex.lots_ids = list(lots_by_id)
+    return list(lots_by_id.values())
 
 
 DESKTOP_PREFERENCE_KEYS = {
@@ -249,6 +268,47 @@ def _handle_command(vertex: Any, command: dict[str, Any]) -> dict[str, Any]:
     if action == "get_lots":
         lots = _refresh_profile(vertex)
         return {"lots": lots, "count": len(lots)}
+
+    if action == "get_lot_editor":
+        lot_id = str(command.get("lot_id", "")).strip()
+        if not lot_id:
+            raise ValueError("Не указан ID лота")
+        profile = vertex.profile or account.get_user(account.id)
+        lot = profile.get_lot(lot_id)
+        if lot is None:
+            raise ValueError("Лот не найден в профиле. Обнови список лотов.")
+        is_currency = _value(getattr(lot.subcategory, "type", None)).upper() == "CURRENCY"
+        if is_currency:
+            chip_fields = account.get_chip_fields(int(lot.subcategory.id))
+            chip_offer = chip_fields.chip_offers.get(str(lot_id))
+            if chip_offer is None:
+                chip_offer = next(
+                    (item for item in chip_fields.chip_offers.values()
+                     if str(item.lot_id) == str(lot_id)), None
+                )
+            if chip_offer is None:
+                raise ValueError("Валютное предложение не найдено в форме редактирования")
+            editor = {
+                "title": getattr(lot, "description", None) or "",
+                "description": "",
+                "price": chip_offer.price,
+                "amount": chip_offer.amount,
+                "active": chip_offer.active,
+                "auto_delivery": False,
+                "is_currency": True,
+            }
+        else:
+            fields = account.get_lot_fields(int(lot_id))
+            editor = {
+                "title": fields.title_ru,
+                "description": fields.description_ru,
+                "price": fields.price,
+                "amount": fields.amount,
+                "active": fields.active,
+                "auto_delivery": bool(fields.auto_delivery),
+                "is_currency": False,
+            }
+        return {"lot": serialize_lot(lot), "editor": editor}
 
     if action == "update_lot":
         lot_id = str(command.get("lot_id", "")).strip()
