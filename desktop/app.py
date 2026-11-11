@@ -10,7 +10,7 @@ from pathlib import Path
 from PySide6.QtCore import QProcess, QProcessEnvironment, QTimer, Qt, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
-    QAbstractItemView, QApplication, QCheckBox, QDialog, QDialogButtonBox,
+    QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
     QDoubleSpinBox, QFormLayout, QFrame, QHBoxLayout, QHeaderView, QLabel,
     QFileDialog, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QScrollArea,
     QPushButton, QSpinBox, QStackedWidget, QTableWidget, QTableWidgetItem,
@@ -326,6 +326,13 @@ class DesktopWindow(QMainWindow):
             lambda: self._export_table_csv(self.lot_table, "funpay_lots.csv")
         )
         lot_actions.addWidget(export_lots)
+        self.raise_category_combo = QComboBox()
+        self.raise_category_combo.setMinimumWidth(170)
+        self.raise_category_combo.addItem("Выбери игру для поднятия", None)
+        lot_actions.addWidget(self.raise_category_combo)
+        raise_category_button = QPushButton("Поднять лоты")
+        raise_category_button.clicked.connect(self._raise_selected_category)
+        lot_actions.addWidget(raise_category_button)
         lot_actions.addStretch(1)
         lots_box.addLayout(lot_actions)
         self.lot_status = QLabel("Изменения отправляются напрямую через API Vertex.")
@@ -643,6 +650,9 @@ class DesktopWindow(QMainWindow):
             elif action == "send_image":
                 QMessageBox.warning(self, "Не удалось отправить изображение", error)
                 self.image_button.setEnabled(True)
+            elif action == "raise_category":
+                self.lot_status.setText(f"Не удалось поднять лоты: {error}")
+                QMessageBox.warning(self, "Поднятие лотов", error)
             return
         action = response.get("action")
         data = response.get("data", {})
@@ -667,6 +677,17 @@ class DesktopWindow(QMainWindow):
             self.lot_status.setText(
                 f"Лот #{data.get('saved_lot_id') or data.get('deleted_lot_id')} успешно обновлён."
                 if action == "update_lot" else "Лот удалён."
+            )
+            self._add_activity(self.lot_status.text())
+        elif action == "raise_category":
+            wait = data.get("wait_seconds")
+            try:
+                wait_text = self._format_wait_time(int(wait)) if wait is not None else "время не указано"
+            except (TypeError, ValueError):
+                wait_text = "время не указано"
+            self.lot_status.setText(
+                f"Запрос на поднятие отправлен: {data.get('category_name', 'категория')}. "
+                f"Следующая попытка — через {wait_text}."
             )
             self._add_activity(self.lot_status.text())
         elif action == "get_analytics":
@@ -729,6 +750,26 @@ class DesktopWindow(QMainWindow):
                     item.setData(Qt.ItemDataRole.UserRole, lot)
                 self.lot_table.setItem(row, column, item)
         self.lots_summary.setText(f"Лотов: {len(self._lots)}")
+        selected_category = self.raise_category_combo.currentData()
+        self.raise_category_combo.clear()
+        self.raise_category_combo.addItem("Выбери игру для поднятия", None)
+        categories: dict[int, dict] = {}
+        for lot in self._lots.values():
+            if lot.get("subcategory_type") != "COMMON" or lot.get("category_id") is None:
+                continue
+            category_id = int(lot["category_id"])
+            category = categories.setdefault(category_id, {
+                "name": lot.get("category_name") or f"Категория {category_id}",
+                "count": 0,
+            })
+            category["count"] += 1
+        for category_id, category in sorted(categories.items(), key=lambda item: item[1]["name"].casefold()):
+            label = f"{category['name']} ({category['count']} подкатегорий/лотов)"
+            self.raise_category_combo.addItem(label, category_id)
+        if selected_category is not None:
+            index = self.raise_category_combo.findData(selected_category)
+            if index >= 0:
+                self.raise_category_combo.setCurrentIndex(index)
         self._filter_lots(self.lot_search.text())
 
     def _filter_lots(self, query: str) -> None:
@@ -747,6 +788,41 @@ class DesktopWindow(QMainWindow):
             f"Показано: {visible} из {self.lot_table.rowCount()}"
             if needle else f"Лотов: {self.lot_table.rowCount()}"
         )
+
+    @staticmethod
+    def _format_wait_time(seconds: int) -> str:
+        seconds = max(0, seconds)
+        days, seconds = divmod(seconds, 86400)
+        hours, seconds = divmod(seconds, 3600)
+        minutes, seconds = divmod(seconds, 60)
+        pieces = []
+        if days:
+            pieces.append(f"{days} д.")
+        if hours:
+            pieces.append(f"{hours} ч.")
+        if minutes:
+            pieces.append(f"{minutes} мин.")
+        if seconds and not pieces:
+            pieces.append(f"{seconds} сек.")
+        return " ".join(pieces) or "0 сек."
+
+    def _raise_selected_category(self) -> None:
+        category_id = self.raise_category_combo.currentData()
+        if category_id is None:
+            QMessageBox.information(self, "Категория не выбрана", "Выбери игру из списка.")
+            return
+        category_name = self.raise_category_combo.currentText()
+        answer = QMessageBox.warning(
+            self, "Поднять обычные лоты?",
+            f"FunPay получит запрос на поднятие всех обычных лотов игры «{category_name}». "
+            "Валютные предложения не поднимаются. Если включено автоподнятие Vertex, "
+            "ручной запрос может пересечься с ним; окончательный интервал определяет FunPay. Продолжить?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer == QMessageBox.StandardButton.Yes:
+            self.lot_status.setText(f"Отправляю запрос на поднятие: {category_name}...")
+            self._send_command("raise_category", category_id=category_id)
 
     def _selected_lot(self) -> dict | None:
         row = self.lot_table.currentRow()
