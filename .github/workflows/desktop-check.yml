@@ -24,3 +24,7 @@ jobs:
         run: python -m unittest discover -s desktop/tests -v
       - name: Verify desktop imports
         run: python -c "from desktop.app import DesktopWindow; from desktop.engine_runner import serialize_order; print('Desktop imports OK')"
+      - name: Smoke-test desktop window construction
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -c "from PySide6.QtWidgets import QApplication; from desktop.app import DesktopWindow; app = QApplication([]); window = DesktopWindow(); assert window.pages.count() == len(window.PAGES); print('Desktop window smoke test OK'); window.close()"
