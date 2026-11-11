@@ -329,6 +329,7 @@ def _read_product_file(root: Path, filename: Any) -> dict[str, Any]:
 
 
 def _save_product_file(root: Path, filename: Any, content: Any) -> dict[str, Any]:
+    root = Path(root).resolve()
     path = _stock_file_path(root, filename)
     if not isinstance(content, str):
         raise ValueError("Содержимое файла товаров должно быть текстом.")
