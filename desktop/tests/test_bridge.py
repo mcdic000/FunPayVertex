@@ -1024,6 +1024,44 @@ class DesktopBridgeSerializationTests(unittest.TestCase):
                 self.skipTest(f"Windows runner does not permit symlink creation: {exc}")
             with self.assertRaisesRegex(ValueError, "символическими ссылками"):
                 _stock_file_path(root, "stock.txt")
+            self.assertFalse((external / "products").exists())
+            with self.assertRaisesRegex(ValueError, "символическими ссылками"):
+                _list_product_files(root)
+            self.assertFalse((external / "products").exists())
+
+
+    def test_stock_file_backup_rejects_symlinked_backup_folder_without_writing_outside(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            storage = root / "storage"
+            products = storage / "products"
+            products.mkdir(parents=True)
+            external = root / "external"
+            external.mkdir()
+            (storage / "config_backups").symlink_to(external, target_is_directory=True)
+            target = products / "stock.txt"
+            target.write_text("original\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "символическими ссылками"):
+                _save_product_file(root, "stock.txt", "replacement\n")
+
+            self.assertEqual(target.read_text(encoding="utf-8"), "original\n")
+            self.assertFalse((external / "products").exists())
+
+
+    def test_rule_config_rejects_symlinked_configs_directory_before_writing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            external = root / "external"
+            external.mkdir()
+            (root / "configs").symlink_to(external, target_is_directory=True)
+
+            with self.assertRaisesRegex(ValueError, "символическими ссылками"):
+                _save_rule_config(
+                    SimpleNamespace(), root, "auto_response",
+                    "[test]\nresponse: safe\n",
+                )
+            self.assertFalse((external / "auto_response.cfg").exists())
 
     def test_message_serializes_text_and_author(self):
         message = SimpleNamespace(
