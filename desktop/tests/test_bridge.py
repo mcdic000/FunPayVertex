@@ -61,6 +61,7 @@ class DesktopBridgeSerializationTests(unittest.TestCase):
             subcategory=SimpleNamespace(
                 id=12, name="Game", fullname="Game / Currency",
                 type=SimpleNamespace(name="COMMON"),
+                category=SimpleNamespace(id=9, name="Test Game"),
             ),
             public_link="https://funpay.com/lots/offer?id=77",
             html="<div>private widget</div>",
@@ -70,6 +71,8 @@ class DesktopBridgeSerializationTests(unittest.TestCase):
         self.assertEqual(result["subcategory_type"], "COMMON")
         self.assertEqual(result["price"], 12.5)
         self.assertEqual(result["active"], True)
+        self.assertEqual(result["category_id"], 9)
+        self.assertEqual(result["category_name"], "Test Game")
         self.assertNotIn("html", result)
         self.assertNotIn("private widget", str(result))
 
@@ -98,10 +101,16 @@ class DesktopBridgeSerializationTests(unittest.TestCase):
 
 
     def test_refresh_profile_includes_private_paused_lots_and_currency_offers(self):
-        common = SimpleNamespace(id=50, name="Game items", fullname="Game / Items",
-                                 type=SimpleNamespace(name="COMMON"))
-        currency = SimpleNamespace(id=88, name="Coins", fullname="Game / Coins",
-                                    type=SimpleNamespace(name="CURRENCY"))
+        common = SimpleNamespace(
+            id=50, name="Game items", fullname="Game / Items",
+            type=SimpleNamespace(name="COMMON"),
+            category=SimpleNamespace(id=7, name="Test Game"),
+        )
+        currency = SimpleNamespace(
+            id=88, name="Coins", fullname="Game / Coins",
+            type=SimpleNamespace(name="CURRENCY"),
+            category=SimpleNamespace(id=8, name="Test Currency Game"),
+        )
         public_common = SimpleNamespace(
             id=100, description="Active item", title="Active item", server="", side="",
             amount=1, price=10.0, currency=SimpleNamespace(name="BYN"), active=True,
@@ -156,8 +165,10 @@ class DesktopBridgeSerializationTests(unittest.TestCase):
         self.assertFalse(by_id["1-2-88-2"]["active"])
         self.assertEqual(account.requested_subcategory, 50)
         self.assertEqual(account.requested_chip_subcategory, 88)
-        self.assertIn(101, vertex.lots_ids)
-        self.assertIn(100, vertex.lots_ids)
+        self.assertEqual(vertex.lots_ids, [100, "1-2-88-1"])
+        self.assertNotIn(101, vertex.lots_ids)
+        self.assertEqual(by_id["101"]["category_id"], 7)
+        self.assertEqual(by_id["1-2-88-2"]["category_id"], 8)
         self.assertIn("1-2-88-2", vertex.desktop_lots)
 
     def test_collect_sales_follows_cursor_and_deduplicates(self):
