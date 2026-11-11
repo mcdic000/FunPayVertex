@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 from desktop.engine_runner import (
     _collect_sales, _currency_editor_payload, _get_desktop_preferences,
+    _handle_command,
     _order_analytics, _refresh_profile,
     _serialize_create_categories,
     serialize_chat, serialize_lot,
@@ -137,6 +138,39 @@ class DesktopBridgeSerializationTests(unittest.TestCase):
                 "NewMessageView.showImageName": True,
             },
         )
+
+
+    def test_send_review_reply_uses_vertex_api_only_when_review_exists(self):
+        review = SimpleNamespace(text="Great buyer", reply="Old reply")
+        sent = []
+
+        class FakeAccount:
+            def get_order(self, order_id, include_review=True):
+                self.order_id = order_id
+                self.include_review = include_review
+                return SimpleNamespace(review=review)
+
+            def send_review(self, order_id, text):
+                sent.append((order_id, text))
+
+        vertex = SimpleNamespace(account=FakeAccount())
+        result = _handle_command(vertex, {
+            "action": "send_review_reply",
+            "order_id": "#987",
+            "text": "  Thank you!  ",
+        })
+        self.assertEqual(sent, [("987", "Thank you!")])
+        self.assertEqual(result["order_id"], "987")
+        self.assertEqual(result["reply"], "Thank you!")
+        self.assertTrue(result["updated"])
+
+        vertex.account.get_order = lambda *_args, **_kwargs: SimpleNamespace(review=None)
+        with self.assertRaisesRegex(ValueError, "нет отзыва"):
+            _handle_command(vertex, {
+                "action": "send_review_reply",
+                "order_id": "988",
+                "text": "A reply",
+            })
 
     def test_order_analytics_groups_by_date_and_counts_statuses(self):
         orders = [
