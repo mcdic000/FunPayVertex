@@ -124,6 +124,7 @@ class DesktopBridgeSerializationTests(unittest.TestCase):
 
     def test_preferences_only_expose_keys_already_in_config(self):
         config = configparser.ConfigParser()
+        config.optionxform = str
         config.read_string(
             "[FunPay]\\nautoRestore = true\\nkeepSentMessagesUnread = false\\n"
             "[NewMessageView]\\nshowImageName = true\\n"
