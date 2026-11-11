@@ -4,7 +4,23 @@ Desktop client foundation for Windows 11.
 
 ## Status
 
-This directory is the starting point for a desktop application that will connect to the existing FunPay Vertex engine. The current commit creates documentation only; it does not yet provide a working desktop client.
+This directory is the starting point for a desktop application that will connect to the existing FunPay Vertex engine. The current milestone provides a navigation shell only; it does not yet connect to FunPay or perform account actions.
+
+## Run on Windows
+
+Requires Python 3.11 or newer.
+
+From PowerShell, in the repository folder:
+
+```powershell
+cd desktop
+py -3.11 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -e .
+funpay-assistant
+```
+
+Alternatively, after installation, launch with `python -m desktop`.
 
 ## Planned architecture
 
@@ -23,4 +39,4 @@ This directory is the starting point for a desktop application that will connect
 
 ## Initial milestone
 
-Build a desktop shell with navigation, connection status, safe settings storage, and a service boundary. Feature modules (orders, chat, auto-delivery, lots, analytics, notifications) will be implemented incrementally and tested against the current FunPay site behavior.
+Build a desktop shell with navigation, connection status, safe settings storage, and a service boundary. Feature modules (orders, chat, auto-delivery, lots, analytics, notifications) will be implemented incrementally and tested against current FunPay site behavior.
