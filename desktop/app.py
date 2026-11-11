@@ -1,6 +1,7 @@
 """Qt desktop interface for FunPay Vertex."""
 from __future__ import annotations
 
+import csv
 import json
 import sys
 from datetime import datetime
@@ -166,6 +167,11 @@ class DesktopWindow(QMainWindow):
         refresh_orders = QPushButton("Обновить")
         refresh_orders.clicked.connect(lambda: self._send_command("get_orders"))
         order_toolbar.addWidget(refresh_orders)
+        export_orders = QPushButton("Экспорт CSV")
+        export_orders.clicked.connect(
+            lambda: self._export_table_csv(self.order_table, "funpay_orders.csv")
+        )
+        order_toolbar.addWidget(export_orders)
         orders_box.addLayout(order_toolbar)
         self.order_table = QTableWidget(0, 6)
         self.order_table.setHorizontalHeaderLabels(
@@ -315,6 +321,11 @@ class DesktopWindow(QMainWindow):
         open_lot_button = QPushButton("Открыть на FunPay")
         open_lot_button.clicked.connect(self._open_selected_lot)
         lot_actions.addWidget(open_lot_button)
+        export_lots = QPushButton("Экспорт CSV")
+        export_lots.clicked.connect(
+            lambda: self._export_table_csv(self.lot_table, "funpay_lots.csv")
+        )
+        lot_actions.addWidget(export_lots)
         lot_actions.addStretch(1)
         lots_box.addLayout(lot_actions)
         self.lot_status = QLabel("Изменения отправляются напрямую через API Vertex.")
@@ -339,6 +350,11 @@ class DesktopWindow(QMainWindow):
         refresh_analytics = QPushButton("Пересчитать")
         refresh_analytics.clicked.connect(lambda: self._send_command("get_analytics"))
         analytics_toolbar.addWidget(refresh_analytics)
+        export_analytics = QPushButton("Экспорт CSV")
+        export_analytics.clicked.connect(
+            lambda: self._export_table_csv(self.analytics_table, "funpay_analytics.csv")
+        )
+        analytics_toolbar.addWidget(export_analytics)
         analytics_box.addLayout(analytics_toolbar)
         self.analytics_table = QTableWidget(0, 3)
         self.analytics_table.setHorizontalHeaderLabels(["Дата", "Заказов", "Сумма"])
@@ -661,6 +677,7 @@ class DesktopWindow(QMainWindow):
         elif action == "get_order_details":
             self._show_order_details(data.get("order", {}))
         elif action in ("send_message", "send_image"):
+            self.image_button.setEnabled(True)
             self.message_input.clear()
             self._add_activity(
                 "Изображение отправлено" if action == "send_image" else "Сообщение отправлено"
@@ -874,7 +891,9 @@ class DesktopWindow(QMainWindow):
             f"{key}: {value}" for key, value in sorted(statuses.items())
         ) or "статусы не получены"
         self.analytics_summary.setText(
-            f"Заказов: {count}  |  Сумма цен в выборке: {gross:,.2f}\n{status_text}"
+            f"Заказов в выборке: {count}  |  Сумма цен: {gross:,.2f}\n{status_text}"
+            + ("\nПоказаны последние страницы; более старые продажи остались за пределами выборки."
+               if analytics.get("has_more") else "")
         )
         daily = analytics.get("daily", [])
         self.analytics_table.setRowCount(len(daily))
@@ -914,6 +933,35 @@ class DesktopWindow(QMainWindow):
         )
         if answer == QMessageBox.StandardButton.Yes:
             self._send_command("update_preferences", preferences=preferences)
+
+    def _export_table_csv(self, table: QTableWidget, default_name: str) -> None:
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Сохранить таблицу", str(self.project_root / default_name),
+            "CSV (*.csv)"
+        )
+        if not path:
+            return
+        try:
+            with open(path, "w", newline="", encoding="utf-8-sig") as file:
+                writer = csv.writer(file, delimiter=";")
+                writer.writerow([
+                    table.horizontalHeaderItem(column).text()
+                    if table.horizontalHeaderItem(column) else f"Колонка {column + 1}"
+                    for column in range(table.columnCount())
+                ])
+                for row in range(table.rowCount()):
+                    writer.writerow([
+                        table.item(row, column).text()
+                        if table.item(row, column) else ""
+                        for column in range(table.columnCount())
+                    ])
+        except OSError as exc:
+            QMessageBox.critical(self, "Ошибка экспорта", f"Не удалось сохранить CSV: {exc}")
+            return
+        self._add_activity(f"Таблица экспортирована: {Path(path).name}")
+        QMessageBox.information(
+            self, "Экспорт завершён", f"Таблица сохранена в файл:\n{path}"
+        )
 
     def _clear_notifications(self) -> None:
         self._activity_history.clear()
@@ -1110,7 +1158,6 @@ class DesktopWindow(QMainWindow):
             self._send_command(
                 "send_image", chat_id=self._selected_chat_id, image_path=image_path
             )
-            QTimer.singleShot(1500, lambda: self.image_button.setEnabled(True))
 
     def _add_activity(self, text: str) -> None:
         timestamp = datetime.now().strftime("%H:%M:%S")
