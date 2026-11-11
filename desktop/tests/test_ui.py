@@ -9,7 +9,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import QProcess
 from PySide6.QtWidgets import QApplication
 
-from desktop.app import DesktopWindow
+from desktop.app import DesktopWindow, RuleConfigDialog
 
 
 class DesktopWindowSmokeTests(unittest.TestCase):
@@ -104,6 +104,35 @@ class DesktopWindowSmokeTests(unittest.TestCase):
             self.assertEqual(window.analytics_table.item(0, 2).text(), "32.50")
         finally:
             window.close()
+
+
+    def test_rule_config_dialog_loads_text_and_displays_validation_result(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "auto_response.cfg"
+            path.write_text("[command]\\nresponse: Hello\\n", encoding="utf-8")
+            submitted = []
+            dialog = RuleConfigDialog(
+                "Test rules", "auto_response", path,
+                lambda name, text: submitted.append((name, text)) or True,
+            )
+            try:
+                self.assertIn("[command]", dialog.editor.toPlainText())
+                dialog._submit()
+                self.assertEqual(submitted, [
+                    ("auto_response", "[command]\\nresponse: Hello\\n")
+                ])
+                self.assertFalse(dialog.save_button.isEnabled())
+                dialog.set_result(error="Response is required")
+                self.assertTrue(dialog.save_button.isEnabled())
+                self.assertIn("старый файл сохранён", dialog.status.text())
+                dialog.set_result(data={"config": {
+                    "sections": 2, "bytes": 128, "backup": "storage/config_backups/auto_response.bak"
+                }})
+                self.assertIn("разделов 2", dialog.status.text())
+                self.assertIn("резервная копия", dialog.status.text())
+            finally:
+                dialog.close()
 
     def test_window_builds_all_pages_and_initial_state(self):
         window = DesktopWindow()
