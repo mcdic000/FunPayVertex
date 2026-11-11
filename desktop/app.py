@@ -147,7 +147,7 @@ class DesktopWindow(QMainWindow):
         self.navigation.setCurrentRow(0)
 
         self.engine_process = QProcess(self)
-        self.engine_process.setProcessChannelMode(QProcess.ProcessChannelMode.SeparateChannels)
+        self.engine_process.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
         self.engine_process.readyReadStandardOutput.connect(self._read_engine_output)
         self.engine_process.started.connect(self._on_engine_started)
         self.engine_process.finished.connect(self._on_engine_finished)
