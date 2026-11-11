@@ -49,6 +49,12 @@ class DesktopWindow(QMainWindow):
         self.preference_section_headings: dict[str, QLabel] = {}
         self._available_preferences: set[str] = set()
         self._analytics_loaded = False
+        self._analytics_cursor: str | None = None
+        self._analytics_locale: str | None = None
+        self._analytics_orders_count = 0
+        self._analytics_gross_total = 0.0
+        self._analytics_status_counts: dict[str, int] = {}
+        self._analytics_daily: dict[str, dict] = {}
 
         self.setWindowTitle("FunPay Assistant")
         self.resize(1180, 760)
@@ -377,8 +383,12 @@ class DesktopWindow(QMainWindow):
         self.analytics_summary.setWordWrap(True)
         analytics_toolbar.addWidget(self.analytics_summary, 1)
         refresh_analytics = QPushButton("Пересчитать")
-        refresh_analytics.clicked.connect(lambda: self._send_command("get_analytics"))
+        refresh_analytics.clicked.connect(self._refresh_analytics)
         analytics_toolbar.addWidget(refresh_analytics)
+        self.load_more_analytics_button = QPushButton("Загрузить старые продажи")
+        self.load_more_analytics_button.setEnabled(False)
+        self.load_more_analytics_button.clicked.connect(self._load_more_analytics)
+        analytics_toolbar.addWidget(self.load_more_analytics_button)
         export_analytics = QPushButton("Экспорт CSV")
         export_analytics.clicked.connect(
             lambda: self._export_table_csv(self.analytics_table, "funpay_analytics.csv")
@@ -632,7 +642,7 @@ class DesktopWindow(QMainWindow):
             self._send_command("get_settings")
             self._send_command("get_lots")
             self._send_command("get_create_categories")
-            self._send_command("get_analytics")
+            self._refresh_analytics()
             self._send_command("get_preferences")
         elif kind == "setup_required":
             self.connection_badge.setText("● Нужна настройка")
@@ -649,7 +659,7 @@ class DesktopWindow(QMainWindow):
             elif message.get("target") == "chats":
                 self._send_command("get_chats")
             elif message.get("target") == "analytics":
-                self._send_command("get_analytics")
+                self._refresh_analytics()
         elif kind == "order_event":
             self._add_activity(f"{message.get('event', 'Заказ')}: #{message.get('order', {}).get('id', '')}")
             self._upsert_order(message.get("order", {}))
@@ -671,6 +681,10 @@ class DesktopWindow(QMainWindow):
                 self.load_more_orders_button.setEnabled(bool(self._orders_cursor))
                 self.load_more_orders_button.setText("Загрузить ещё")
                 self.orders_summary.setText(f"Не удалось загрузить заказы: {error}")
+            elif action == "get_analytics":
+                self.load_more_analytics_button.setEnabled(bool(self._analytics_cursor))
+                self.load_more_analytics_button.setText("Загрузить старые продажи")
+                self.analytics_summary.setText(f"Не удалось загрузить аналитику: {error}")
             elif action in ("get_lot_editor", "update_lot", "delete_lot"):
                 self.lot_status.setText(f"Ошибка работы с лотом: {error}")
             elif action == "update_preferences":
@@ -732,7 +746,16 @@ class DesktopWindow(QMainWindow):
             )
             self._add_activity(self.lot_status.text())
         elif action == "get_analytics":
-            self._render_analytics(data.get("analytics", {}))
+            self._analytics_cursor = data.get("next_cursor")
+            self._analytics_locale = data.get("locale") or self._analytics_locale
+            self._render_analytics(
+                data.get("analytics", {}), append=bool(data.get("append"))
+            )
+            self.load_more_analytics_button.setEnabled(bool(self._analytics_cursor))
+            self.load_more_analytics_button.setText(
+                "Загрузить старые продажи"
+                if self._analytics_cursor else "Все продажи загружены"
+            )
         elif action == "get_preferences":
             self._set_preferences(data.get("preferences", {}))
         elif action == "update_preferences":
@@ -1147,28 +1170,82 @@ class DesktopWindow(QMainWindow):
         else:
             QMessageBox.information(self, "Ссылка недоступна", "Для этого лота не удалось получить ссылку.")
 
-    def _render_analytics(self, analytics: dict) -> None:
-        count = int(analytics.get("orders_count", 0) or 0)
-        gross = float(analytics.get("gross_total", 0) or 0)
-        statuses = analytics.get("status_counts", {})
+    def _refresh_analytics(self) -> None:
+        self._analytics_cursor = None
+        self._analytics_locale = None
+        self._analytics_orders_count = 0
+        self._analytics_gross_total = 0.0
+        self._analytics_status_counts.clear()
+        self._analytics_daily.clear()
+        self.load_more_analytics_button.setEnabled(False)
+        self.load_more_analytics_button.setText("Загрузить старые продажи")
+        self.analytics_table.setRowCount(0)
+        self._analytics_loaded = False
+        self._send_command("get_analytics")
+
+    def _load_more_analytics(self) -> None:
+        if not self._analytics_cursor:
+            return
+        self.load_more_analytics_button.setEnabled(False)
+        self.load_more_analytics_button.setText("Загружаю...")
+        self._send_command(
+            "get_analytics",
+            start_from=self._analytics_cursor,
+            locale=self._analytics_locale,
+        )
+
+    def _render_analytics(self, analytics: dict, append: bool = False) -> None:
+        if not append:
+            self._analytics_orders_count = 0
+            self._analytics_gross_total = 0.0
+            self._analytics_status_counts.clear()
+            self._analytics_daily.clear()
+
+        self._analytics_orders_count += int(analytics.get("orders_count", 0) or 0)
+        self._analytics_gross_total += float(analytics.get("gross_total", 0) or 0)
+        for status, count in analytics.get("status_counts", {}).items():
+            self._analytics_status_counts[status] = (
+                self._analytics_status_counts.get(status, 0) + int(count)
+            )
+        for day in analytics.get("daily", []):
+            date_key = str(day.get("date", ""))
+            if not date_key:
+                continue
+            current = self._analytics_daily.setdefault(
+                date_key, {"date": date_key, "orders": 0, "amount": 0.0}
+            )
+            current["orders"] += int(day.get("orders", 0) or 0)
+            current["amount"] += float(day.get("amount", 0) or 0)
+
         status_text = ", ".join(
-            f"{key}: {value}" for key, value in sorted(statuses.items())
+            f"{key}: {value}" for key, value in sorted(self._analytics_status_counts.items())
         ) or "статусы не получены"
         self.analytics_summary.setText(
-            f"Заказов в выборке: {count}  |  Сумма цен: {gross:,.2f}\n{status_text}"
-            + ("\nПоказаны последние страницы; более старые продажи остались за пределами выборки."
-               if analytics.get("has_more") else "")
+            f"Загружено продаж: {self._analytics_orders_count}  |  "
+            f"Сумма цен: {self._analytics_gross_total:,.2f}\n{status_text}"
         )
-        daily = analytics.get("daily", [])
+
+        daily = sorted(
+            self._analytics_daily.values(),
+            key=lambda item: item["date"],
+            reverse=True,
+        )
         self.analytics_table.setRowCount(len(daily))
         for row, item in enumerate(daily):
             values = [
-                item.get("date", ""),
-                item.get("orders", 0),
-                f"{float(item.get('amount', 0) or 0):,.2f}",
+                item["date"],
+                item["orders"],
+                f"{item['amount']:,.2f}",
             ]
             for column, value in enumerate(values):
                 self.analytics_table.setItem(row, column, QTableWidgetItem(str(value)))
+        self.analytics_note.setText(
+            "Сумма цен — сумма заказов в загруженной выборке; она не равна чистой прибыли "
+            "или доступному балансу. Нажми «Загрузить старые продажи», чтобы добавить предыдущие страницы."
+            if self._analytics_cursor
+            else "Сумма цен — сумма всех загруженных заказов; она не равна чистой прибыли "
+                 "или доступному балансу."
+        )
         self._analytics_loaded = True
 
     def _set_preferences(self, preferences: dict) -> None:
