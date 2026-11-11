@@ -903,19 +903,19 @@ class DesktopBridgeSerializationTests(unittest.TestCase):
             response_target = root / "configs" / "auto_response.cfg"
             delivery_target = root / "configs" / "auto_delivery.cfg"
             response_target.write_text(
-                "[old]\\nresponse: Original\\n", encoding="utf-8"
+                "[old]\nresponse: Original\n", encoding="utf-8"
             )
             delivery_target.write_text(
-                "[old]\\nresponse: Original $product\\n", encoding="utf-8"
+                "[old]\nresponse: Original $product\n", encoding="utf-8"
             )
             vertex = SimpleNamespace(AR_CFG=None, RAW_AR_CFG=None, AD_CFG=None)
             response_text = (
-                "[sell|buy]\\nresponse: Hello $buyer\\n"
-                "telegramNotification: 0\\n"
+                "[sell|buy]\nresponse: Hello $buyer\n"
+                "telegramNotification: 0\n"
             )
             delivery_text = (
-                "[stock offer]\\nresponse: Here is $product\\n"
-                "productsFileName: stock.txt\\n"
+                "[stock offer]\nresponse: Here is $product\n"
+                "productsFileName: stock.txt\n"
             )
             old_cwd = Path.cwd()
             try:
@@ -936,9 +936,9 @@ class DesktopBridgeSerializationTests(unittest.TestCase):
                     _save_rule_config(vertex, root, "auto_delivery", delivery_text)
                 self.assertEqual(
                     delivery_target.read_text(encoding="utf-8"),
-                    "[old]\\nresponse: Original $product\\n",
+                    "[old]\nresponse: Original $product\n",
                 )
-                (products_dir / "stock.txt").write_text("item-1\\n", encoding="utf-8")
+                (products_dir / "stock.txt").write_text("item-1\n", encoding="utf-8")
                 delivery_result = _save_rule_config(
                     vertex, root, "auto_delivery", delivery_text
                 )
