@@ -1,56 +1,72 @@
 # FunPay Assistant Desktop
 
-Desktop client foundation for Windows 11, built around the existing FunPay Vertex engine.
+Windows desktop interface for the existing FunPay Vertex engine. The project keeps Vertex as the account/API layer and runs it in a separate process so network polling does not freeze the Qt interface.
 
-## Quick install on Windows\n\n1. Double-click `InstallDesktop.bat` in the repository root.\n2. When installation finishes, run the original `Start.bat` once and complete Vertex's first-run setup.\n3. Double-click `RunDesktop.bat` to launch FunPay Assistant.\n\nThe scripts use a local Python 3.11 virtual environment under `desktop/.venv`.\n\n## Manual install and first run on Windows
+## Quick installation (Windows 11)
 
-Requires Python 3.11 or newer. Open PowerShell in the repository root:
+1. Install **Python 3.11** (enable the Python Launcher during setup).
+2. Double-click `InstallDesktop.bat` in the repository root.
+3. Run the original `Start.bat` once and complete the Vertex first-run setup.
+4. Double-click `RunDesktop.bat`.
+
+The installer creates `desktop/.venv` and installs the desktop dependencies locally. It does not copy account credentials into the repository. Vertex's configuration remains in the root `configs` directory.
+
+## Manual installation
+
+Open PowerShell in the repository root:
 
 ```powershell
 cd desktop
 py -3.11 -m venv .venv
 .\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
 python -m pip install -e .
 
-# Return to the repository root while keeping the virtual environment active.
+# Return to the repository root and complete Vertex setup.
 cd ..
 Start.bat
 ```
 
-Complete the original Vertex first-run wizard. It creates `configs/_main.cfg` and the other local configuration files.
-
-After setup, start the desktop client from the same activated PowerShell session:
+After setup, launch the desktop app from the same activated environment:
 
 ```powershell
 cd desktop
-funpay-assistant
+python -m desktop
 ```
 
-Alternatively, after installation, launch with `python -m desktop`.
+## Included features
 
-## First connection
+- **Connection and status:** starts Vertex in a child process, displays the account name, current connection state, lot count, and recent events.
+- **Orders:** loads sales from FunPay, local text search, order details, buyer and order fields, statuses, date, and review information.
+- **Messages:** loads chat list and history, sends text after confirmation, and uploads/sends PNG, JPG, GIF, or WEBP images in private chats (10 MB limit in the desktop bridge).
+- **Lots:** searches the seller's visible and discoverable private trade-page lots; displays regular and currency offers; opens public links; edits regular lot title, Russian description, price, availability, and active state; edits currency offer price, amount, and active state; deletes regular lots after a separate confirmation.
+- **Analytics:** sales count, status breakdown, daily totals and amount summary from up to 10 pages of recent sales. The screen indicates when older pages remain.
+- **Event journal:** keeps a session-only list of connection, order, message, and engine events. Clearing the journal does not affect FunPay.
+- **Automation:** reads and saves Vertex's global auto-delivery, auto-response, and auto-raise switches.
+- **Additional settings:** reads and saves selected Boolean preferences already present in the local Vertex configuration.
 
-1. Complete the first-run setup using the activated virtual environment as shown above.
-2. Open FunPay Assistant Desktop and press **Запустить движок**.
-3. Confirm the warning. The engine will use the automation switches and settings already stored in `configs`.
+## Important behavior and limitations
 
-When connected, the desktop process starts the existing Vertex engine in a separate child process. This keeps polling and engine worker threads away from the Qt UI thread. The home page shows the account, lot count, and a feed of Vertex events. The Orders page loads the sales list, supports local search, and opens a detailed order summary on double-click. The Messages page loads chats and their message history and supports sending text messages after an explicit confirmation.
-
-**Important:** if auto-response, auto-delivery, auto-raise, or other automations are enabled in the Vertex configuration, they will run when the engine starts. Review `configs/_main.cfg`, `configs/auto_response.cfg`, and `configs/auto_delivery.cfg` before connecting.
-
-Only one Vertex process should use the same FunPay account/configuration at a time. Do not run the desktop engine and the original `Start.bat` bot simultaneously.
+- Before starting the engine, review `configs/_main.cfg`, `configs/auto_response.cfg`, and `configs/auto_delivery.cfg`. Existing enabled Vertex automations begin running when the engine starts.
+- Do not run the desktop engine and the original `Start.bat` bot at the same time with the same account/configuration.
+- The lot list is built from the public seller profile and the private trade pages for categories discoverable from that profile (including categories present in the previous in-memory profile). It does not exhaustively query every FunPay category. If a seller has only paused offers in a category that has never appeared in the profile, that category may not be discovered automatically.
+- Built-in FunPay auto-delivery secrets are not displayed or edited by this interface. The quantity field is locked for these lots to avoid accidentally replacing inventory.
+- Currency offers use Vertex's separate `ChipFields` API. Their title/description and deletion are not exposed by this first desktop editor; price, amount, and active state are editable.
+- Analytics are a bounded sample of up to 10 pages of recent sales, not a complete lifetime accounting ledger. "Amount" is the sum of order prices in the retrieved sample; it is not net profit, payout, or current balance.
+- The event journal is kept in memory for the current desktop session only.
+- Real account workflows still need to be verified by running the application with the user's own FunPay account. The CI checks do not log in to FunPay or execute live account changes.
 
 ## Architecture
 
-- `app.py`: PySide6 desktop interface and child-process controller.
-- `engine_runner.py`: startup adapter that loads the existing Vertex configuration, initializes the engine, and forwards selected events to the desktop.
-- Existing `vertex.py`, `FunPayAPI/`, and Telegram modules remain the automation engine.
-
-Orders, basic chat workflows, and global auto-delivery/auto-response/auto-raise switches are now connected to the Vertex account API. Automation switches are saved back to the existing local Vertex configuration. Lot editing, automation settings, analytics, notification preferences, and advanced order actions still need their dedicated UI/service modules.
+- `app.py`: PySide6 user interface, dialogs, tables, local search, and process controller.
+- `engine_runner.py`: JSON-lines bridge, command validation, serializers, and calls into the actual Vertex/FunPayAPI objects.
+- `tests/test_bridge.py`: unit tests for serializers, lot discovery, and paginated analytics.
+- `.github/workflows/desktop-check.yml`: Windows CI for compilation, unit tests, and import checks.
+- Existing `vertex.py`, `FunPayAPI/`, configuration loaders, and automation modules remain the account engine.
 
 ## Security and licensing
 
-- Never commit FunPay session cookies, `golden_key`, Telegram tokens, or other credentials.
-- The existing Vertex configuration format is reused for this initial integration. Treat the local `configs` directory as sensitive and do not share it.
-- The upstream Vertex code is GPL-3.0; retain its notices and meet the license requirements for modified/redistributed versions.
-- See [NOTICE.md](NOTICE.md) for the modification notice and upstream attribution.
+- Never commit or share FunPay session cookies, `golden_key`, Telegram tokens, or the local `configs` directory.
+- Desktop commands do not serialize raw lot HTML, credentials, or FunPay auto-delivery secrets to the UI.
+- The upstream Vertex code is licensed under GPL-3.0. Retain required notices and meet the license requirements for modified or redistributed versions.
+- See [NOTICE.md](NOTICE.md) for attribution and modification notes.
