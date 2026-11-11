@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 from desktop.engine_runner import (
     _collect_sales, _currency_editor_payload, _order_analytics, _refresh_profile,
+    _serialize_create_categories,
     serialize_chat, serialize_lot,
     serialize_message, serialize_order,
 )
@@ -80,6 +81,31 @@ class DesktopBridgeSerializationTests(unittest.TestCase):
         self.assertNotIn("html", result)
         self.assertNotIn("private widget", str(result))
 
+
+
+    def test_create_category_serialization_includes_both_offer_types(self):
+        common = SimpleNamespace(
+            id=10, name="Items", fullname="Items Game",
+            type=SimpleNamespace(name="COMMON"),
+            category=SimpleNamespace(id=3, name="Game"),
+        )
+        currency = SimpleNamespace(
+            id=11, name="Gold", fullname="Gold Game",
+            type=SimpleNamespace(name="CURRENCY"),
+            category=SimpleNamespace(id=3, name="Game"),
+        )
+        categories = _serialize_create_categories({
+            "COMMON": {10: common},
+            "CURRENCY": {11: currency},
+        })
+        self.assertEqual([item["type"] for item in categories], ["COMMON", "CURRENCY"])
+        self.assertEqual(
+            categories[0]["create_link"], "https://funpay.com/lots/offerEdit?node=10"
+        )
+        self.assertEqual(
+            categories[1]["create_link"], "https://funpay.com/chips/11/trade"
+        )
+        self.assertEqual(categories[0]["category_name"], "Game")
 
     def test_currency_editor_payload_uses_desktop_lot_cache(self):
         offer = SimpleNamespace(price=4.25, amount=9, active=False)
