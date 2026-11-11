@@ -149,6 +149,10 @@ class DesktopWindow(QMainWindow):
         orders_panel, orders_box = self._panel("Заказы",
             "Список продаж FunPay. Нажми «Обновить», чтобы запросить актуальные данные.")
         order_toolbar = QHBoxLayout()
+        self.order_search = QLineEdit()
+        self.order_search.setPlaceholderText("Поиск по ID, покупателю или описанию...")
+        self.order_search.textChanged.connect(self._filter_orders)
+        order_toolbar.addWidget(self.order_search, 1)
         self.orders_summary = QLabel("Заказы ещё не загружены")
         self.orders_summary.setObjectName("muted")
         order_toolbar.addWidget(self.orders_summary)
@@ -165,6 +169,7 @@ class DesktopWindow(QMainWindow):
         self.order_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.order_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.order_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.order_table.cellDoubleClicked.connect(self._open_order_details)
         self.order_table.verticalHeader().setVisible(False)
         self.order_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         for column in (0, 1, 3, 4, 5):
@@ -385,6 +390,8 @@ class DesktopWindow(QMainWindow):
         elif action == "get_chat_history":
             if str(data.get("chat_id")) == self._selected_chat_id:
                 self._set_messages(data.get("messages", []))
+        elif action == "get_order_details":
+            self._show_order_details(data.get("order", {}))
         elif action == "send_message":
             self.message_input.clear()
             self._add_activity("Сообщение отправлено")
@@ -403,6 +410,54 @@ class DesktopWindow(QMainWindow):
                     item.setData(Qt.ItemDataRole.UserRole, order.get("chat_id"))
                 self.order_table.setItem(row, column, item)
         self.orders_summary.setText(f"Загружено заказов: {len(orders)}")
+
+    def _filter_orders(self, query: str) -> None:
+        needle = query.casefold().strip()
+        visible = 0
+        for row in range(self.order_table.rowCount()):
+            values = []
+            for column in range(self.order_table.columnCount()):
+                item = self.order_table.item(row, column)
+                values.append(item.text() if item else "")
+            matches = not needle or needle in " ".join(values).casefold()
+            self.order_table.setRowHidden(row, not matches)
+            visible += int(matches)
+        self.orders_summary.setText(
+            f"Показано: {visible} из {self.order_table.rowCount()}"
+            if needle else f"Загружено заказов: {self.order_table.rowCount()}"
+        )
+
+    def _open_order_details(self, row: int, _column: int) -> None:
+        item = self.order_table.item(row, 0)
+        if item and item.text():
+            self._send_command("get_order_details", order_id=item.text())
+
+    def _show_order_details(self, order: dict) -> None:
+        if not order:
+            return
+        lines = [
+            f"Заказ: #{order.get('id', '')}",
+            f"Статус: {order.get('status', '')}",
+            f"Покупатель: {order.get('buyer', '')} (ID {order.get('buyer_id', '')})",
+            f"Сумма: {order.get('sum', '')} {order.get('currency', '')}",
+            f"Количество: {order.get('amount', '')}",
+            f"Категория: {order.get('category', '')}",
+            f"Сервер: {order.get('server', '')}",
+            f"Платформа: {order.get('side', '')}",
+            f"Игрок: {order.get('player', '')}",
+        ]
+        fields = order.get("fields", [])
+        if fields:
+            lines.append("")
+            lines.append("Поля заказа:")
+            lines.extend(f"• {field.get('name') or field.get('id')}: {field.get('value')}"
+                         for field in fields)
+        review = order.get("review")
+        if review:
+            lines.extend(["", f"Отзыв: {review.get('stars', '')}/5",
+                          review.get("text", "") or ""])
+        QMessageBox.information(self, f"Информация о заказе #{order.get('id', '')}",
+                                "\\n".join(lines))
 
     def _upsert_order(self, order: dict) -> None:
         order_id = str(order.get("id", ""))
