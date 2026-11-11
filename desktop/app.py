@@ -591,10 +591,10 @@ class DesktopWindow(QMainWindow):
         if self.engine_process.state() == QProcess.ProcessState.NotRunning:
             return
         self.connection_badge.setText("● Отключение...")
-        self.engine_details.setText("Останавливаю отдельный процесс движка...")
+        self.engine_details.setText("Останавливаю Vertex штатным способом...")
         self.engine_button.setEnabled(False)
-        self.engine_process.terminate()
-        QTimer.singleShot(1800, self._force_stop_engine)
+        self._send_command("shutdown")
+        QTimer.singleShot(5000, self._force_stop_engine)
 
     def _force_stop_engine(self) -> None:
         if self.engine_process.state() != QProcess.ProcessState.NotRunning:
@@ -1724,9 +1724,16 @@ class DesktopWindow(QMainWindow):
         self._closing = True
         if self.tray_icon is not None:
             self.tray_icon.hide()
-        if self.engine_process.state() != QProcess.ProcessState.NotRunning:
+        if self.engine_process.state() == QProcess.ProcessState.Running:
+            self._send_command("shutdown")
+            if not self.engine_process.waitForFinished(2500):
+                self.engine_process.terminate()
+                if not self.engine_process.waitForFinished(1000):
+                    self.engine_process.kill()
+                    self.engine_process.waitForFinished(1000)
+        elif self.engine_process.state() != QProcess.ProcessState.NotRunning:
             self.engine_process.kill()
-            self.engine_process.waitForFinished(1200)
+            self.engine_process.waitForFinished(1000)
         event.accept()
 
     def _apply_style(self) -> None:
