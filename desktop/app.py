@@ -764,7 +764,7 @@ class DesktopWindow(QMainWindow):
             })
             category["count"] += 1
         for category_id, category in sorted(categories.items(), key=lambda item: item[1]["name"].casefold()):
-            label = f"{category['name']} ({category['count']} подкатегорий/лотов)"
+            label = f"{category['name']} ({category['count']} лотов)"
             self.raise_category_combo.addItem(label, category_id)
         if selected_category is not None:
             index = self.raise_category_combo.findData(selected_category)
