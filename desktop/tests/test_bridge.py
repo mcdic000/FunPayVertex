@@ -1,4 +1,5 @@
 import configparser
+import io
 import contextlib
 import io
 import os
@@ -15,8 +16,8 @@ from PIL import Image
 from desktop.engine_runner import (
     _collect_sales, _currency_editor_payload, _get_desktop_preferences,
     _handle_command,
-    _order_analytics, _prepare_image_payload, _refresh_profile, _save_rule_config,
-    main as engine_main,
+    _command_loop, _order_analytics, _prepare_image_payload, _refresh_profile,
+    _save_rule_config, main as engine_main,
     _serialize_create_categories,
     serialize_chat, serialize_lot,
     serialize_message, serialize_order,
@@ -607,18 +608,26 @@ class DesktopBridgeSerializationTests(unittest.TestCase):
             self.assertEqual(result["chat_id"], "123")
             self.assertEqual(result["message"]["id"], "55")
 
-    def test_shutdown_command_uses_vertex_stop_method(self):
-        state = {"stopped": False}
+    def test_command_loop_acknowledges_shutdown_before_stopping_vertex(self):
+        events = []
 
         class FakeVertex:
             account = object()
 
             def stop(self):
-                state["stopped"] = True
+                events.append("stop")
 
-        result = _handle_command(FakeVertex(), {"action": "shutdown"})
-        self.assertTrue(state["stopped"])
-        self.assertEqual(result, {"stopping": True})
+        vertex = FakeVertex()
+        command = json.dumps({"request_id": 9, "action": "shutdown"}) + "\\n"
+        with patch("desktop.engine_runner.sys.stdin", io.StringIO(command)):
+            with patch("desktop.engine_runner.emit", side_effect=lambda payload: events.append(payload)):
+                _command_loop(vertex)
+
+        self.assertEqual(events[0]["type"], "response")
+        self.assertEqual(events[0]["request_id"], 9)
+        self.assertTrue(events[0]["ok"])
+        self.assertEqual(events[0]["data"], {"stopping": True})
+        self.assertEqual(events[1], "stop")
 
 
     def test_collect_sales_detects_repeated_cursor(self):
