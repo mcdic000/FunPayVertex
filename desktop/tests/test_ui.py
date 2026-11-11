@@ -9,7 +9,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import QProcess
 from PySide6.QtWidgets import QApplication
 
-from desktop.app import DesktopWindow, RuleConfigDialog
+from desktop.app import DesktopWindow, ProductFilesDialog, RuleConfigDialog
 
 
 class DesktopWindowSmokeTests(unittest.TestCase):
@@ -133,6 +133,47 @@ class DesktopWindowSmokeTests(unittest.TestCase):
                 self.assertIn("резервная копия", dialog.status.text().casefold())
             finally:
                 dialog.close()
+
+    def test_product_files_dialog_loads_stock_and_reports_backup_after_save(self):
+        read_requests = []
+        save_requests = []
+        dialog = ProductFilesDialog(
+            lambda filename: read_requests.append(filename),
+            lambda filename, content: save_requests.append((filename, content)) or True,
+        )
+        try:
+            dialog.set_files([
+                {"name": "blade_ball.txt", "bytes": 20, "lines": 2, "products": 2},
+            ])
+            self.assertEqual(read_requests, ["blade_ball.txt"])
+            dialog.set_file({
+                "file": {
+                    "name": "blade_ball.txt", "bytes": 20,
+                    "lines": 2, "products": 2,
+                },
+                "content": "item-1\\nitem-2\\n",
+            })
+            self.assertEqual(dialog.filename_input.text(), "blade_ball.txt")
+            self.assertEqual(dialog.editor.toPlainText(), "item-1\\nitem-2\\n")
+            dialog._save()
+            self.assertEqual(
+                save_requests, [("blade_ball.txt", "item-1\\nitem-2\\n")]
+            )
+            self.assertFalse(dialog.save_button.isEnabled())
+            dialog.set_save_result({
+                "file": {
+                    "name": "blade_ball.txt", "bytes": 20,
+                    "lines": 2, "products": 2,
+                    "backup": "storage/config_backups/products/blade_ball.bak",
+                },
+                "files": [
+                    {"name": "blade_ball.txt", "bytes": 20, "lines": 2, "products": 2},
+                ],
+            })
+            self.assertTrue(dialog.save_button.isEnabled())
+            self.assertIn("резервная копия", dialog.meta.text().casefold())
+        finally:
+            dialog.close()
 
     def test_window_builds_all_pages_and_initial_state(self):
         window = DesktopWindow()
