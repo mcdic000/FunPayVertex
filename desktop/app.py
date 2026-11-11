@@ -8,7 +8,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QProcess, QProcessEnvironment, QTimer, Qt
 from PySide6.QtWidgets import (
-    QAbstractItemView, QApplication, QFrame, QHBoxLayout, QHeaderView,
+    QAbstractItemView, QApplication, QCheckBox, QFrame, QHBoxLayout, QHeaderView,
     QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox,
     QPushButton, QStackedWidget, QTableWidget, QTableWidgetItem, QTextEdit,
     QVBoxLayout, QWidget,
@@ -225,17 +225,40 @@ class DesktopWindow(QMainWindow):
         messages_layout.addWidget(conversation_panel, 1)
         self.pages.addWidget(messages_page)
 
-        # Other sections are explicit placeholders until their services are implemented.
+        # Global automation switches
         for title, description in self.PAGES[3:]:
             page = QWidget()
             page_layout = QVBoxLayout(page)
             page_layout.setContentsMargins(0, 8, 0, 0)
             panel, box = self._panel(title, description)
-            note = QLabel("Этот раздел подключим следующим этапом. Пока здесь нет рабочих настроек.")
-            note.setObjectName("notice")
-            note.setWordWrap(True)
-            box.addWidget(note)
-            box.addStretch(1)
+            if title == "Автовыдача":
+                note = QLabel(
+                    "Эти переключатели управляют автоматизациями существующего Vertex. "
+                    "Перед включением проверь правила автовыдачи и автоответов в конфигурации."
+                )
+                note.setObjectName("notice")
+                note.setWordWrap(True)
+                box.addWidget(note)
+                self.auto_delivery_check = QCheckBox("Автоматическая выдача товаров")
+                self.auto_response_check = QCheckBox("Автоматические ответы в чатах")
+                self.auto_raise_check = QCheckBox("Автоматическое поднятие лотов")
+                for checkbox in (self.auto_delivery_check, self.auto_response_check, self.auto_raise_check):
+                    checkbox.setObjectName("automationCheck")
+                    box.addWidget(checkbox)
+                save_automations = QPushButton("Сохранить настройки")
+                save_automations.setObjectName("primaryButton")
+                save_automations.clicked.connect(self._save_automation_settings)
+                box.addWidget(save_automations)
+                self.automation_status = QLabel("Подключи аккаунт, чтобы загрузить настройки.")
+                self.automation_status.setObjectName("muted")
+                box.addWidget(self.automation_status)
+                box.addStretch(1)
+            else:
+                note = QLabel("Этот раздел подключим следующим этапом. Пока здесь нет рабочих настроек.")
+                note.setObjectName("notice")
+                note.setWordWrap(True)
+                box.addWidget(note)
+                box.addStretch(1)
             page_layout.addWidget(panel, 1)
             self.pages.addWidget(page)
 
@@ -248,6 +271,8 @@ class DesktopWindow(QMainWindow):
             elif index == 2 and self.engine_process.state() == QProcess.ProcessState.Running:
                 if not self._chats:
                     self._send_command("get_chats")
+            elif index == 3 and self.engine_process.state() == QProcess.ProcessState.Running:
+                self._send_command("get_settings")
 
     def _toggle_engine(self) -> None:
         if self.engine_process.state() != QProcess.ProcessState.NotRunning:
@@ -351,6 +376,7 @@ class DesktopWindow(QMainWindow):
             self._add_activity(f"Подключён аккаунт {username}")
             self._send_command("get_orders")
             self._send_command("get_chats")
+            self._send_command("get_settings")
         elif kind == "setup_required":
             self.connection_badge.setText("● Нужна настройка")
             self.engine_details.setText(message.get("message", "Сначала настрой Vertex."))
@@ -390,6 +416,14 @@ class DesktopWindow(QMainWindow):
         elif action == "get_chat_history":
             if str(data.get("chat_id")) == self._selected_chat_id:
                 self._set_messages(data.get("messages", []))
+        elif action == "get_settings":
+            self.auto_delivery_check.setChecked(bool(data.get("auto_delivery")))
+            self.auto_response_check.setChecked(bool(data.get("auto_response")))
+            self.auto_raise_check.setChecked(bool(data.get("auto_raise")))
+            self.automation_status.setText("Настройки загружены из configs/_main.cfg")
+        elif action == "update_automation_settings":
+            self.automation_status.setText("Настройки автоматизаций сохранены.")
+            self._add_activity("Настройки автоматизаций сохранены")
         elif action == "get_order_details":
             self._show_order_details(data.get("order", {}))
         elif action == "send_message":
@@ -410,6 +444,28 @@ class DesktopWindow(QMainWindow):
                     item.setData(Qt.ItemDataRole.UserRole, order.get("chat_id"))
                 self.order_table.setItem(row, column, item)
         self.orders_summary.setText(f"Загружено заказов: {len(orders)}")
+
+    def _save_automation_settings(self) -> None:
+        if self.engine_process.state() != QProcess.ProcessState.Running:
+            QMessageBox.information(self, "Движок не запущен",
+                                    "Подключи аккаунт, чтобы менять настройки автоматизаций.")
+            return
+        settings = {
+            "autoDelivery": self.auto_delivery_check.isChecked(),
+            "autoResponse": self.auto_response_check.isChecked(),
+            "autoRaise": self.auto_raise_check.isChecked(),
+        }
+        if any(settings.values()):
+            answer = QMessageBox.warning(
+                self, "Включение автоматизаций",
+                "Включённые автоматизации будут выполнять действия на твоём аккаунте FunPay. "
+                "Убедись, что правила автовыдачи и автоответов настроены правильно. Сохранить?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+        self._send_command("update_automation_settings", settings=settings)
 
     def _filter_orders(self, query: str) -> None:
         needle = query.casefold().strip()
@@ -581,6 +637,7 @@ class DesktopWindow(QMainWindow):
             #status { color: #e5bd70; padding: 7px 11px; background: #30291d; border-radius: 10px; }
             #panel { background: #1a1e27; border: 1px solid #2b3240; border-radius: 12px; }
             #notice { color: #bac7da; background: #202a39; border-radius: 8px; padding: 14px; }
+            QCheckBox#automationCheck { spacing: 10px; padding: 10px 4px; }
             #activityList, #chatList, #messageList, #dataTable {
                 background: #151922; border: 1px solid #2b3240; border-radius: 8px;
                 padding: 6px; color: #d1d7e2; gridline-color: #2b3240;
