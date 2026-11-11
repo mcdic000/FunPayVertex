@@ -877,6 +877,151 @@ class DesktopBridgeSerializationTests(unittest.TestCase):
             self.assertEqual(vertex.AD_CFG.sections(), ["lot"])
             self.assertTrue((root / result["backup"]).is_file())
 
+
+    def test_save_auto_response_config_validates_backs_up_and_hot_reloads(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "configs").mkdir()
+            target = root / "configs" / "auto_response.cfg"
+            original = "[old]\\nresponse: Old response\\n"
+            target.write_text(original, encoding="utf-8")
+            old_config = object()
+            vertex = SimpleNamespace(AR_CFG=old_config, RAW_AR_CFG=old_config, AD_CFG=None)
+
+            fake_utils = ModuleType("Utils")
+            fake_utils.__path__ = []
+            fake_loader = ModuleType("Utils.config_loader")
+
+            def read_config(path):
+                config = configparser.ConfigParser(delimiters=(":",), interpolation=None)
+                config.optionxform = str
+                with open(path, "r", encoding="utf-8") as file:
+                    config.read_file(file)
+                return config
+
+            def load_auto_response(path):
+                config = read_config(path)
+                for section in config.sections():
+                    if not config.has_option(section, "response") or not config[section]["response"].strip():
+                        raise ValueError(f"Response missing in {section}")
+                return config
+
+            fake_loader.load_auto_response_config = load_auto_response
+            fake_loader.load_raw_auto_response_config = read_config
+            fake_utils.config_loader = fake_loader
+            content = (
+                "[sell|buy]\\nresponse: Hello $buyer\\n"
+                "telegramNotification: 0\\nenabled: 1\\n"
+            )
+
+            old_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with patch.dict(sys.modules, {
+                    "Utils": fake_utils,
+                    "Utils.config_loader": fake_loader,
+                }):
+                    result = _save_rule_config(vertex, root, "auto_response", content)
+            finally:
+                os.chdir(old_cwd)
+
+            self.assertEqual(result["sections"], 1)
+            self.assertEqual(target.read_text(encoding="utf-8"), content)
+            self.assertEqual(vertex.AR_CFG.sections(), ["sell", "buy"])
+            self.assertEqual(vertex.RAW_AR_CFG.sections(), ["sell|buy"])
+            self.assertTrue((root / result["backup"]).is_file())
+            self.assertEqual((root / result["backup"]).read_text(encoding="utf-8"), original)
+
+    def test_save_invalid_rule_config_keeps_original_and_live_config(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "configs").mkdir()
+            target = root / "configs" / "auto_response.cfg"
+            original = "[old]\\nresponse: keep me\\n"
+            target.write_text(original, encoding="utf-8")
+            old_config = object()
+            vertex = SimpleNamespace(AR_CFG=old_config, RAW_AR_CFG=old_config, AD_CFG=None)
+            fake_utils = ModuleType("Utils")
+            fake_utils.__path__ = []
+            fake_loader = ModuleType("Utils.config_loader")
+            fake_loader.load_auto_response_config = lambda _path: (_ for _ in ()).throw(
+                ValueError("Response is required")
+            )
+            fake_loader.load_raw_auto_response_config = lambda _path: configparser.ConfigParser()
+            fake_utils.config_loader = fake_loader
+
+            old_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with patch.dict(sys.modules, {
+                    "Utils": fake_utils,
+                    "Utils.config_loader": fake_loader,
+                }):
+                    with self.assertRaisesRegex(ValueError, "Response is required"):
+                        _save_rule_config(vertex, root, "auto_response", "[bad]\\n")
+            finally:
+                os.chdir(old_cwd)
+
+            self.assertEqual(target.read_text(encoding="utf-8"), original)
+            self.assertIs(vertex.AR_CFG, old_config)
+            self.assertIs(vertex.RAW_AR_CFG, old_config)
+            self.assertEqual(list((root / "configs").glob("*.tmp")), [])
+
+    def test_save_delivery_rules_requires_products_file_before_replacing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "configs").mkdir()
+            (root / "storage" / "products").mkdir(parents=True)
+            target = root / "configs" / "auto_delivery.cfg"
+            original = "[old]\\nresponse: Old $product\\n"
+            target.write_text(original, encoding="utf-8")
+            old_config = object()
+            vertex = SimpleNamespace(AD_CFG=old_config)
+            fake_utils = ModuleType("Utils")
+            fake_utils.__path__ = []
+            fake_loader = ModuleType("Utils.config_loader")
+
+            def load_delivery(path):
+                config = configparser.ConfigParser(delimiters=(":",), interpolation=None)
+                with open(path, "r", encoding="utf-8") as file:
+                    config.read_file(file)
+                for section in config.sections():
+                    products = config[section].get("productsFileName")
+                    if products and not (root / "storage" / "products" / products).is_file():
+                        raise ValueError("ProductsFileNotFoundError")
+                    if products and "$product" not in config[section].get("response", ""):
+                        raise ValueError("NoProductVarError")
+                return config
+
+            fake_loader.load_auto_delivery_config = load_delivery
+            fake_utils.config_loader = fake_loader
+            content = (
+                "[lot]\\nresponse: You receive $product\\n"
+                "productsFileName: stock.txt\\n"
+            )
+
+            old_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with patch.dict(sys.modules, {
+                    "Utils": fake_utils,
+                    "Utils.config_loader": fake_loader,
+                }):
+                    with self.assertRaisesRegex(ValueError, "ProductsFileNotFoundError"):
+                        _save_rule_config(vertex, root, "auto_delivery", content)
+                    self.assertEqual(target.read_text(encoding="utf-8"), original)
+                    (root / "storage" / "products" / "stock.txt").write_text(
+                        "item-1\\n", encoding="utf-8"
+                    )
+                    result = _save_rule_config(vertex, root, "auto_delivery", content)
+            finally:
+                os.chdir(old_cwd)
+
+            self.assertEqual(result["sections"], 1)
+            self.assertEqual(target.read_text(encoding="utf-8"), content)
+            self.assertEqual(vertex.AD_CFG.sections(), ["lot"])
+            self.assertTrue((root / result["backup"]).is_file())
+
     def test_message_serializes_text_and_author(self):
         message = SimpleNamespace(
             id=7, text="Hi", image_link=None, author="Buyer", author_id=42,
