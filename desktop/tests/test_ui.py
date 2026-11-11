@@ -4,6 +4,7 @@ import unittest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtCore import QProcess
 from PySide6.QtWidgets import QApplication
 
 from desktop.app import DesktopWindow
@@ -22,7 +23,7 @@ class DesktopWindowSmokeTests(unittest.TestCase):
             self.assertEqual(window.navigation.currentRow(), 0)
             self.assertEqual(window.page_title.text(), "Главная")
             self.assertEqual(window.engine_button.text(), "Запустить движок")
-            self.assertEqual(window.engine_process.state(), window.engine_process.ProcessState.NotRunning)
+            self.assertEqual(window.engine_process.state(), QProcess.ProcessState.NotRunning)
             self.assertEqual(window.lot_table.columnCount(), 8)
             self.assertEqual(window.order_table.columnCount(), 6)
             self.assertEqual(window.analytics_table.columnCount(), 3)
