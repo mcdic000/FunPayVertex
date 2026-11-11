@@ -457,7 +457,7 @@ class DesktopWindow(QMainWindow):
             lines.extend(["", f"Отзыв: {review.get('stars', '')}/5",
                           review.get("text", "") or ""])
         QMessageBox.information(self, f"Информация о заказе #{order.get('id', '')}",
-                                "\\n".join(lines))
+                                "\n".join(lines))
 
     def _upsert_order(self, order: dict) -> None:
         order_id = str(order.get("id", ""))
