@@ -340,25 +340,37 @@ class DesktopBridgeSerializationTests(unittest.TestCase):
         self.assertFalse(offer.active)
         self.assertEqual(result["saved_lot_id"], "1-2-88-3")
 
-    def test_raise_category_is_scoped_to_categories_with_own_regular_lots(self):
+    def test_raise_category_is_scoped_to_owned_regular_subcategories(self):
         class FakeAccount:
-            def raise_lots(self, category_id):
+            def raise_lots(self, category_id, subcategories=None):
                 self.raised_category = category_id
+                self.raised_subcategories = subcategories
                 return 1800
 
         account = FakeAccount()
         vertex = SimpleNamespace(
             account=account,
             desktop_lots={
-                "1": {"subcategory_type": "COMMON", "category_id": 7, "category_name": "Game"},
-                "2": {"subcategory_type": "CURRENCY", "category_id": 7, "category_name": "Game"},
+                "1": {"subcategory_type": "COMMON", "category_id": 7,
+                      "category_name": "Game", "subcategory_id": 70},
+                "2": {"subcategory_type": "CURRENCY", "category_id": 7,
+                      "category_name": "Game", "subcategory_id": 71},
+                "3": {"subcategory_type": "COMMON", "category_id": 7,
+                      "category_name": "Game", "subcategory_id": 72},
             },
         )
         result = _handle_command(vertex, {"action": "raise_category", "category_id": 7})
         self.assertEqual(account.raised_category, 7)
+        self.assertEqual(account.raised_subcategories, [70, 72])
         self.assertEqual(result["wait_seconds"], 1800)
         with self.assertRaisesRegex(ValueError, "не найдено обычных лотов"):
             _handle_command(vertex, {"action": "raise_category", "category_id": 8})
+        self.assertEqual(account.raised_category, 7)
+
+        vertex.desktop_lots["1"].pop("subcategory_id")
+        vertex.desktop_lots["3"].pop("subcategory_id")
+        with self.assertRaisesRegex(ValueError, "Не удалось определить подкатегории"):
+            _handle_command(vertex, {"action": "raise_category", "category_id": 7})
         self.assertEqual(account.raised_category, 7)
 
 
