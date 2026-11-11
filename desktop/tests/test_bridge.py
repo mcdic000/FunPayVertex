@@ -976,13 +976,13 @@ class DesktopBridgeSerializationTests(unittest.TestCase):
             loaded = _read_product_file(root, "blade_ball.txt")
             self.assertEqual(loaded["content"], "item-a\n\nitem-b\n")
 
-            updated = _save_product_file(root, "blade_ball.txt", "item-c\\n")
+            updated = _save_product_file(root, "blade_ball.txt", "item-c\n")
             self.assertEqual(updated["products"], 1)
             backup = root / updated["backup"]
             self.assertTrue(backup.is_file())
             self.assertEqual(backup.read_text(encoding="utf-8"), "item-a\n\nitem-b\n")
             self.assertEqual(
-                _read_product_file(root, "blade_ball.txt")["content"], "item-c\\n"
+                _read_product_file(root, "blade_ball.txt")["content"], "item-c\n"
             )
             files = _list_product_files(root)
             self.assertEqual([item["name"] for item in files], ["blade_ball.txt"])
