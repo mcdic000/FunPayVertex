@@ -2,7 +2,7 @@
 
 Desktop client foundation for Windows 11, built around the existing FunPay Vertex engine.
 
-## Run on Windows
+## Install and first run on Windows
 
 Requires Python 3.11 or newer. Open PowerShell in the repository root:
 
@@ -11,15 +11,27 @@ cd desktop
 py -3.11 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -e .
+
+# Return to the repository root while keeping the virtual environment active.
+cd ..
+Start.bat
+```
+
+Complete the original Vertex first-run wizard. It creates `configs/_main.cfg` and the other local configuration files.
+
+After setup, start the desktop client from the same activated PowerShell session:
+
+```powershell
+cd desktop
 funpay-assistant
 ```
 
-The same app can be started with `python -m desktop` after installation.
+Alternatively, after installation, launch with `python -m desktop`.
 
 ## First connection
 
-1. Run the original `Start.bat` in the repository root once and finish the Vertex first-run setup. This creates `configs/_main.cfg`.
-2. Return to FunPay Assistant Desktop and press **Запустить движок**.
+1. Complete the first-run setup using the activated virtual environment as shown above.
+2. Open FunPay Assistant Desktop and press **Запустить движок**.
 3. Confirm the warning. The engine will use the automation switches and settings already stored in `configs`.
 
 When connected, the desktop process starts the existing Vertex engine in a separate child process. This keeps polling and engine worker threads away from the Qt UI thread. The home page shows the account, lot count, and a small feed of Vertex events.
@@ -41,3 +53,4 @@ The desktop bridge currently reports connection state and a basic activity feed.
 - Never commit FunPay session cookies, `golden_key`, Telegram tokens, or other credentials.
 - The existing Vertex configuration format is reused for this initial integration. Treat the local `configs` directory as sensitive and do not share it.
 - The upstream Vertex code is GPL-3.0; retain its notices and meet the license requirements for modified/redistributed versions.
+- See [NOTICE.md](NOTICE.md) for the modification notice and upstream attribution.
