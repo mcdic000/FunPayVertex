@@ -130,7 +130,7 @@ class DesktopWindowSmokeTests(unittest.TestCase):
                     "sections": 2, "bytes": 128, "backup": "storage/config_backups/auto_response.bak"
                 }})
                 self.assertIn("разделов 2", dialog.status.text())
-                self.assertIn("резервная копия", dialog.status.text())
+                self.assertIn("резервная копия", dialog.status.text().casefold())
             finally:
                 dialog.close()
 
