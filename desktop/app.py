@@ -46,6 +46,8 @@ class DesktopWindow(QMainWindow):
         self._create_categories: list[dict] = []
         self._activity_history: list[tuple[str, str]] = []
         self.preference_checks: dict[str, QCheckBox] = {}
+        self.preference_section_headings: dict[str, QLabel] = {}
+        self._available_preferences: set[str] = set()
         self._analytics_loaded = False
 
         self.setWindowTitle("FunPay Assistant")
@@ -470,9 +472,12 @@ class DesktopWindow(QMainWindow):
                 section_title = section_name
                 heading = QLabel(section_name)
                 heading.setObjectName("sectionTitle")
+                heading.setVisible(False)
+                self.preference_section_headings[section_name] = heading
                 settings_box.addWidget(heading)
             checkbox = QCheckBox(label_text)
             checkbox.setObjectName("automationCheck")
+            checkbox.setVisible(False)
             self.preference_checks[key] = checkbox
             settings_box.addWidget(checkbox)
         preference_actions = QHBoxLayout()
@@ -1163,10 +1168,22 @@ class DesktopWindow(QMainWindow):
         self._analytics_loaded = True
 
     def _set_preferences(self, preferences: dict) -> None:
+        self._available_preferences = set(preferences)
         for key, checkbox in self.preference_checks.items():
-            if key in preferences:
+            available = key in self._available_preferences
+            checkbox.setVisible(available)
+            checkbox.setEnabled(available)
+            if available:
                 checkbox.setChecked(bool(preferences[key]))
-        self.preferences_status.setText("Параметры загружены из configs/_main.cfg")
+        for section_name, heading in self.preference_section_headings.items():
+            heading.setVisible(
+                any(key.startswith(section_name + ".") for key in self._available_preferences)
+            )
+        self.preferences_status.setText(
+            f"Загружено параметров: {len(self._available_preferences)}"
+            if self._available_preferences
+            else "В текущей конфигурации Vertex нет дополнительных параметров для этого экрана."
+        )
 
     def _save_preferences(self) -> None:
         if self.engine_process.state() != QProcess.ProcessState.Running:
@@ -1176,9 +1193,16 @@ class DesktopWindow(QMainWindow):
             )
             return
         preferences = {
-            key: checkbox.isChecked()
-            for key, checkbox in self.preference_checks.items()
+            key: self.preference_checks[key].isChecked()
+            for key in self._available_preferences
+            if key in self.preference_checks
         }
+        if not preferences:
+            QMessageBox.information(
+                self, "Нет доступных параметров",
+                "В текущей конфигурации Vertex не найдено дополнительных параметров для сохранения.",
+            )
+            return
         answer = QMessageBox.question(
             self, "Сохранить дополнительные настройки?",
             "Настройки будут записаны в configs/_main.cfg. Некоторые параметры влияют "
