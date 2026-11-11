@@ -968,19 +968,19 @@ class DesktopBridgeSerializationTests(unittest.TestCase):
     def test_stock_file_create_read_update_and_backup(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            created = _save_product_file(root, "blade_ball.txt", "item-a\\n\\nitem-b\\n")
+            created = _save_product_file(root, "blade_ball.txt", "item-a\n\nitem-b\n")
             self.assertEqual(created["products"], 2)
             self.assertEqual(created["lines"], 3)
             self.assertIsNone(created["backup"])
 
             loaded = _read_product_file(root, "blade_ball.txt")
-            self.assertEqual(loaded["content"], "item-a\\n\\nitem-b\\n")
+            self.assertEqual(loaded["content"], "item-a\n\nitem-b\n")
 
             updated = _save_product_file(root, "blade_ball.txt", "item-c\\n")
             self.assertEqual(updated["products"], 1)
             backup = root / updated["backup"]
             self.assertTrue(backup.is_file())
-            self.assertEqual(backup.read_text(encoding="utf-8"), "item-a\\n\\nitem-b\\n")
+            self.assertEqual(backup.read_text(encoding="utf-8"), "item-a\n\nitem-b\n")
             self.assertEqual(
                 _read_product_file(root, "blade_ball.txt")["content"], "item-c\\n"
             )
