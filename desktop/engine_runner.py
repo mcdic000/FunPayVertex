@@ -68,6 +68,18 @@ def serialize_message(message: Any) -> dict[str, Any]:
 
 
 
+def _currency_editor_payload(lot_data: dict[str, Any], chip_offer: Any) -> dict[str, Any]:
+    return {
+        "title": lot_data.get("title") or "Валютное предложение",
+        "description": "",
+        "price": chip_offer.price,
+        "amount": chip_offer.amount,
+        "active": bool(chip_offer.active),
+        "auto_delivery": False,
+        "is_currency": True,
+    }
+
+
 def serialize_lot(lot: Any) -> dict[str, Any]:
     subcategory = getattr(lot, "subcategory", None)
     category = getattr(subcategory, "category", None)
@@ -381,15 +393,7 @@ def _handle_command(vertex: Any, command: dict[str, Any]) -> dict[str, Any]:
                 )
             if chip_offer is None:
                 raise ValueError("Валютное предложение не найдено в форме редактирования")
-            editor = {
-                "title": getattr(lot, "description", None) or "",
-                "description": "",
-                "price": chip_offer.price,
-                "amount": chip_offer.amount,
-                "active": chip_offer.active,
-                "auto_delivery": False,
-                "is_currency": True,
-            }
+            editor = _currency_editor_payload(lot_data, chip_offer)
         else:
             fields = account.get_lot_fields(int(lot_id))
             editor = {
