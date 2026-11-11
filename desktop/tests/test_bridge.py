@@ -999,14 +999,17 @@ class DesktopBridgeSerializationTests(unittest.TestCase):
                     with self.assertRaises(ValueError):
                         _stock_file_path(root, name)
             with self.assertRaisesRegex(ValueError, "нулевой символ"):
-                _save_product_file(root, "safe.txt", "valid\\x00invalid")
+                _save_product_file(root, "safe.txt", "valid" + chr(0) + "invalid")
 
     def test_stock_file_rejects_symbolic_storage_directory(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             external = root / "external"
             external.mkdir()
-            (root / "storage").symlink_to(external, target_is_directory=True)
+            try:
+                (root / "storage").symlink_to(external, target_is_directory=True)
+            except (OSError, NotImplementedError) as exc:
+                self.skipTest(f"Windows runner does not permit symlink creation: {exc}")
             with self.assertRaisesRegex(ValueError, "символическими ссылками"):
                 _stock_file_path(root, "stock.txt")
 
