@@ -66,6 +66,95 @@ def serialize_message(message: Any) -> dict[str, Any]:
     }
 
 
+
+
+def serialize_lot(lot: Any) -> dict[str, Any]:
+    subcategory = getattr(lot, "subcategory", None)
+    return {
+        "id": str(getattr(lot, "id", "")),
+        "title": getattr(lot, "description", None) or getattr(lot, "title", None) or "",
+        "server": getattr(lot, "server", None) or "",
+        "side": getattr(lot, "side", None) or "",
+        "amount": getattr(lot, "amount", None),
+        "price": getattr(lot, "price", None),
+        "currency": _value(getattr(lot, "currency", None)),
+        "active": bool(getattr(lot, "active", True)),
+        "auto": bool(getattr(lot, "auto", False)),
+        "subcategory": (
+            getattr(subcategory, "fullname", None)
+            or getattr(subcategory, "name", None)
+            or "Без категории"
+        ),
+        "subcategory_id": getattr(subcategory, "id", None),
+        "subcategory_type": _value(getattr(subcategory, "type", None)).upper(),
+        "public_link": getattr(lot, "public_link", "") or "",
+    }
+
+
+def _refresh_profile(vertex: Any) -> list[dict[str, Any]]:
+    profile = vertex.account.get_user(vertex.account.id)
+    vertex.profile = profile
+    if hasattr(vertex, "curr_profile"):
+        vertex.curr_profile = profile
+    if hasattr(vertex, "lots_ids"):
+        vertex.lots_ids = [lot.id for lot in profile.get_lots()]
+    return [serialize_lot(lot) for lot in profile.get_lots()]
+
+
+DESKTOP_PREFERENCE_KEYS = {
+    "FunPay": ("multiDelivery", "autoRestore", "autoDisable", "oldMsgGetMode",
+               "keepSentMessagesUnread"),
+    "Greetings": ("ignoreSystemMessages", "onlyNewChats", "sendGreetings"),
+    "BlockList": ("blockDelivery", "blockResponse", "blockNewMessageNotification",
+                  "blockNewOrderNotification", "blockCommandNotification"),
+    "NewMessageView": ("includeMyMessages", "includeFPMessages", "includeBotMessages",
+                       "notifyOnlyMyMessages", "notifyOnlyFPMessages",
+                       "notifyOnlyBotMessages", "showImageName"),
+}
+
+
+def _get_desktop_preferences(config: Any) -> dict[str, bool]:
+    result = {}
+    for section_name, keys in DESKTOP_PREFERENCE_KEYS.items():
+        if section_name not in config:
+            continue
+        section = config[section_name]
+        for key in keys:
+            result[f"{section_name}.{key}"] = section.getboolean(key, fallback=False)
+    return result
+
+
+def _order_analytics(orders: list[Any]) -> dict[str, Any]:
+    from collections import defaultdict
+
+    counts: dict[str, int] = defaultdict(int)
+    daily: dict[str, dict[str, Any]] = {}
+    gross_total = 0.0
+    for order in orders:
+        status = _value(getattr(order, "status", None)).upper() or "UNKNOWN"
+        counts[status] += 1
+        raw_price = getattr(order, "price", None)
+        try:
+            price = float(raw_price) if raw_price is not None else 0.0
+        except (TypeError, ValueError):
+            price = 0.0
+        gross_total += price
+        raw_date = getattr(order, "date", None)
+        day = raw_date.date().isoformat() if isinstance(raw_date, datetime) else (
+            raw_date.isoformat() if isinstance(raw_date, date) else ""
+        )
+        if day:
+            item = daily.setdefault(day, {"date": day, "orders": 0, "amount": 0.0})
+            item["orders"] += 1
+            item["amount"] += price
+    return {
+        "orders_count": len(orders),
+        "gross_total": round(gross_total, 2),
+        "status_counts": dict(counts),
+        "daily": sorted(daily.values(), key=lambda item: item["date"], reverse=True),
+    }
+
+
 def _prepare_working_tree(root: Path) -> None:
     os.chdir(root)
     for folder in ("configs", "logs", "storage", "storage/cache", "storage/plugins",
@@ -156,6 +245,121 @@ def _handle_command(vertex: Any, command: dict[str, Any]) -> dict[str, Any]:
             "auto_response": vertex.MAIN_CFG["FunPay"].getboolean("autoResponse"),
             "auto_raise": vertex.MAIN_CFG["FunPay"].getboolean("autoRaise"),
         }
+
+    if action == "get_lots":
+        lots = _refresh_profile(vertex)
+        return {"lots": lots, "count": len(lots)}
+
+    if action == "update_lot":
+        lot_id = str(command.get("lot_id", "")).strip()
+        if not lot_id:
+            raise ValueError("Не указан ID лота")
+        profile = vertex.profile or account.get_user(account.id)
+        lot = profile.get_lot(lot_id)
+        if lot is None:
+            raise ValueError("Лот не найден в профиле. Обнови список лотов.")
+        values = command.get("values")
+        if not isinstance(values, dict):
+            raise ValueError("Не переданы новые значения лота")
+        for key in ("title", "description"):
+            if key in values and not isinstance(values[key], str):
+                raise ValueError(f"Поле {key} должно быть текстом")
+        if "price" in values:
+            try:
+                price = float(values["price"])
+            except (TypeError, ValueError):
+                raise ValueError("Цена должна быть числом")
+            if price <= 0:
+                raise ValueError("Цена должна быть больше нуля")
+        if "amount" in values:
+            try:
+                amount = int(values["amount"])
+            except (TypeError, ValueError):
+                raise ValueError("Количество должно быть целым числом")
+            if amount < 0:
+                raise ValueError("Количество не может быть отрицательным")
+        if "active" in values and type(values["active"]) is not bool:
+            raise ValueError("Статус активности должен быть логическим значением")
+
+        subcategory_type = _value(getattr(lot.subcategory, "type", None)).upper()
+        if subcategory_type == "CURRENCY":
+            chip_fields = account.get_chip_fields(int(lot.subcategory.id))
+            chip_offer = chip_fields.chip_offers.get(str(lot_id))
+            if chip_offer is None:
+                chip_offer = next(
+                    (item for item in chip_fields.chip_offers.values()
+                     if str(item.lot_id) == str(lot_id)), None
+                )
+            if chip_offer is None:
+                raise ValueError("Валютное предложение не найдено в форме редактирования")
+            if "price" in values:
+                chip_offer.price = float(values["price"])
+            if "amount" in values:
+                chip_offer.amount = int(values["amount"])
+            if "active" in values:
+                chip_offer.active = bool(values["active"])
+            account.save_chip(chip_fields)
+        else:
+            fields = account.get_lot_fields(int(lot_id))
+            if "title" in values:
+                fields.title_ru = values["title"].strip()
+            if "description" in values:
+                fields.description_ru = values["description"]
+            if "price" in values:
+                fields.price = float(values["price"])
+            if "amount" in values:
+                if fields.auto_delivery:
+                    raise ValueError(
+                        "У этого лота включена встроенная автовыдача FunPay. "
+                        "Количество зависит от списка товаров, поэтому измените его в форме автовыдачи."
+                    )
+                fields.amount = int(values["amount"])
+            if "active" in values:
+                fields.active = bool(values["active"])
+            account.save_lot(fields)
+
+        lots = _refresh_profile(vertex)
+        return {"lots": lots, "count": len(lots), "saved_lot_id": lot_id}
+
+    if action == "delete_lot":
+        lot_id = str(command.get("lot_id", "")).strip()
+        if not lot_id:
+            raise ValueError("Не указан ID лота")
+        profile = vertex.profile or account.get_user(account.id)
+        lot = profile.get_lot(lot_id)
+        if lot is None:
+            raise ValueError("Лот не найден в профиле. Обнови список лотов.")
+        if _value(getattr(lot.subcategory, "type", None)).upper() == "CURRENCY":
+            raise ValueError("Удаление валютных предложений через этот экран пока не поддерживается.")
+        account.delete_lot(int(lot_id))
+        lots = _refresh_profile(vertex)
+        return {"lots": lots, "count": len(lots), "deleted_lot_id": lot_id}
+
+    if action == "get_analytics":
+        _next, orders, _locale, _subcategories = account.get_sales(
+            include_paid=True, include_closed=True, include_refunded=True
+        )
+        return {"analytics": _order_analytics(list(orders))}
+
+    if action == "get_preferences":
+        return {"preferences": _get_desktop_preferences(vertex.MAIN_CFG)}
+
+    if action == "update_preferences":
+        updates = command.get("preferences")
+        if not isinstance(updates, dict):
+            raise ValueError("Не переданы настройки")
+        allowed = {
+            f"{section}.{key}"
+            for section, keys in DESKTOP_PREFERENCE_KEYS.items()
+            for key in keys
+        }
+        if set(updates) - allowed or any(type(value) is not bool for value in updates.values()):
+            raise ValueError("Недопустимые параметры настроек")
+        for full_key, value in updates.items():
+            section_name, key = full_key.split(".", 1)
+            vertex.MAIN_CFG[section_name][key] = "1" if value else "0"
+        vertex.save_config(vertex.MAIN_CFG, "configs/_main.cfg")
+        return {"preferences": _get_desktop_preferences(vertex.MAIN_CFG)}
 
     if action == "get_order_details":
         order_id = str(command.get("order_id", "")).lstrip("#")
