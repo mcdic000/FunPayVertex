@@ -16,6 +16,7 @@ from desktop.engine_runner import (
     _collect_sales, _currency_editor_payload, _get_desktop_preferences,
     _handle_command,
     _command_loop, _order_analytics, _prepare_image_payload, _refresh_profile,
+    _save_product_file, _list_product_files, _read_product_file, _stock_file_path,
     _save_rule_config, main as engine_main,
     _serialize_create_categories,
     serialize_chat, serialize_lot,
@@ -962,6 +963,52 @@ class DesktopBridgeSerializationTests(unittest.TestCase):
             self.assertTrue((root / delivery_result["backup"]).is_file())
             self.assertEqual(response_result["sections"], 1)
             self.assertEqual(delivery_result["sections"], 1)
+
+
+    def test_stock_file_create_read_update_and_backup(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            created = _save_product_file(root, "blade_ball.txt", "item-a\\n\\nitem-b\\n")
+            self.assertEqual(created["products"], 2)
+            self.assertEqual(created["lines"], 3)
+            self.assertIsNone(created["backup"])
+
+            loaded = _read_product_file(root, "blade_ball.txt")
+            self.assertEqual(loaded["content"], "item-a\\n\\nitem-b\\n")
+
+            updated = _save_product_file(root, "blade_ball.txt", "item-c\\n")
+            self.assertEqual(updated["products"], 1)
+            backup = root / updated["backup"]
+            self.assertTrue(backup.is_file())
+            self.assertEqual(backup.read_text(encoding="utf-8"), "item-a\\n\\nitem-b\\n")
+            self.assertEqual(
+                _read_product_file(root, "blade_ball.txt")["content"], "item-c\\n"
+            )
+            files = _list_product_files(root)
+            self.assertEqual([item["name"] for item in files], ["blade_ball.txt"])
+            self.assertEqual(files[0]["products"], 1)
+
+    def test_stock_file_names_cannot_escape_products_folder(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in (
+                "../outside.txt", "folder/file.txt", "folder\\\\file.txt",
+                "CON", "NUL.txt", ".hidden", "bad?.txt", "name.",
+            ):
+                with self.subTest(name=name):
+                    with self.assertRaises(ValueError):
+                        _stock_file_path(root, name)
+            with self.assertRaisesRegex(ValueError, "нулевой символ"):
+                _save_product_file(root, "safe.txt", "valid\\x00invalid")
+
+    def test_stock_file_rejects_symbolic_storage_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            external = root / "external"
+            external.mkdir()
+            (root / "storage").symlink_to(external, target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, "символическими ссылками"):
+                _stock_file_path(root, "stock.txt")
 
     def test_message_serializes_text_and_author(self):
         message = SimpleNamespace(
