@@ -1529,7 +1529,7 @@ class DesktopWindow(QMainWindow):
             message.setWindowTitle(f"Информация о заказе #{order.get('id', '')}")
             message.setText("\n".join(lines))
             reply_button = None
-            if review.get("text"):
+            if review is not None:
                 reply_button = message.addButton(
                     "Ответить на отзыв" if not review.get("reply") else "Изменить ответ",
                     QMessageBox.ButtonRole.ActionRole,
