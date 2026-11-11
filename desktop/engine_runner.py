@@ -94,19 +94,31 @@ def serialize_lot(lot: Any) -> dict[str, Any]:
 def _refresh_profile(vertex: Any) -> list[dict[str, Any]]:
     """Refresh the public profile and enrich it with the owner's private trade pages."""
     account = vertex.account
+    previous_profile = getattr(vertex, "profile", None)
     profile = account.get_user(account.id)
     vertex.profile = profile
     if hasattr(vertex, "curr_profile"):
         vertex.curr_profile = profile
 
     lots_by_id = {str(lot.id): serialize_lot(lot) for lot in profile.get_lots()}
-    common_subcategories = {
-        int(lot.subcategory.id)
-        for lot in profile.get_lots()
-        if getattr(getattr(lot, "subcategory", None), "type", None) is not None
-        and _value(lot.subcategory.type).upper() == "COMMON"
-    }
-    # Private trade pages also show paused common lots.
+    profiles = [profile] + ([previous_profile] if previous_profile is not None else [])
+    common_subcategories: dict[int, Any] = {}
+    currency_subcategories: dict[int, Any] = {}
+    for source_profile in profiles:
+        for lot in source_profile.get_lots():
+            subcategory = getattr(lot, "subcategory", None)
+            if subcategory is None:
+                continue
+            subcategory_id = getattr(subcategory, "id", None)
+            if subcategory_id is None:
+                continue
+            kind = _value(getattr(subcategory, "type", None)).upper()
+            if kind == "COMMON":
+                common_subcategories[int(subcategory_id)] = subcategory
+            elif kind == "CURRENCY":
+                currency_subcategories[int(subcategory_id)] = subcategory
+
+    # Private trade pages also show paused standard listings.
     for subcategory_id in sorted(common_subcategories):
         try:
             owned_lots = account.get_my_subcategory_lots(subcategory_id)
@@ -114,6 +126,36 @@ def _refresh_profile(vertex: Any) -> list[dict[str, Any]]:
             continue
         for lot in owned_lots:
             lots_by_id[str(lot.id)] = serialize_lot(lot)
+
+    # ChipFields is the supported edit surface for currency offers and contains
+    # the full set of offers in each currency subcategory, including inactive ones.
+    for subcategory_id, subcategory in currency_subcategories.items():
+        try:
+            chip_fields = account.get_chip_fields(subcategory_id)
+        except Exception:
+            continue
+        for offer in chip_fields.chip_offers.values():
+            lot_id = str(offer.lot_id)
+            current = lots_by_id.get(lot_id, {})
+            lots_by_id[lot_id] = {
+                **current,
+                "id": lot_id,
+                "title": current.get("title") or "Валютное предложение",
+                "server": current.get("server", ""),
+                "side": current.get("side", ""),
+                "amount": offer.amount,
+                "price": offer.price,
+                "currency": current.get("currency") or _value(account.currency),
+                "active": bool(offer.active),
+                "auto": False,
+                "subcategory": current.get("subcategory") or
+                    getattr(subcategory, "fullname", None) or
+                    getattr(subcategory, "name", None) or "Валюта",
+                "subcategory_id": subcategory_id,
+                "subcategory_type": "CURRENCY",
+                "public_link": current.get("public_link") or
+                    f"https://funpay.com/chips/offer?id={lot_id}",
+            }
 
     if hasattr(vertex, "lots_ids"):
         vertex.lots_ids = list(lots_by_id)
@@ -210,6 +252,7 @@ def _register_desktop_events(vertex: Any) -> None:
         emit({"type": "activity", "title": "Список заказов обновлён",
               "event": type(event).__name__})
         emit({"type": "refresh", "target": "orders"})
+        emit({"type": "refresh", "target": "analytics"})
 
     def chats_changed(_vertex: Any, event: Any) -> None:
         emit({"type": "activity", "title": "Список чатов обновлён",
