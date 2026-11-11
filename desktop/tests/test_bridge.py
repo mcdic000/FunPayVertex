@@ -90,7 +90,7 @@ class DesktopBridgeSerializationTests(unittest.TestCase):
             category=SimpleNamespace(id=3, name="Game"),
         )
         currency = SimpleNamespace(
-            id=11, name="Gold", fullname="Gold Game",
+            id=11, name="Zulu", fullname="Zulu Game",
             type=SimpleNamespace(name="CURRENCY"),
             category=SimpleNamespace(id=3, name="Game"),
         )
