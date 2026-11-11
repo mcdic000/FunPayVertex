@@ -354,6 +354,42 @@ class DesktopBridgeSerializationTests(unittest.TestCase):
             _handle_command(vertex, {"action": "raise_category", "category_id": 8})
         self.assertEqual(account.raised_category, 7)
 
+
+    def test_update_lot_rejects_non_finite_prices_and_fractional_amounts(self):
+        class FakeAccount:
+            def get_lot_fields(self, _lot_id):
+                raise AssertionError("The API must not be called for invalid values")
+
+        vertex = SimpleNamespace(
+            account=FakeAccount(),
+            desktop_lots={"42": {"id": "42", "subcategory_type": "COMMON"}},
+        )
+        for values, message in (
+            ({"price": float("nan")}, "конечным числом"),
+            ({"price": float("inf")}, "конечным числом"),
+            ({"amount": 2.5}, "целым числом"),
+            ({"amount": True}, "целым числом"),
+        ):
+            with self.subTest(values=values):
+                with self.assertRaisesRegex(ValueError, message):
+                    _handle_command(vertex, {
+                        "action": "update_lot", "lot_id": "42", "values": values,
+                    })
+
+    def test_raise_category_rejects_fractional_and_boolean_ids(self):
+        class FakeAccount:
+            def raise_lots(self, _category_id):
+                raise AssertionError("The API must not be called for invalid IDs")
+
+        vertex = SimpleNamespace(
+            account=FakeAccount(),
+            desktop_lots={"1": {"subcategory_type": "COMMON", "category_id": 7}},
+        )
+        for value in (7.5, True, float("nan")):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(ValueError, "корректную категорию"):
+                    _handle_command(vertex, {"action": "raise_category", "category_id": value})
+
     def test_order_analytics_groups_by_date_and_counts_statuses(self):
         orders = [
             SimpleNamespace(
@@ -577,6 +613,29 @@ class DesktopBridgeSerializationTests(unittest.TestCase):
         result = _handle_command(FakeVertex(), {"action": "shutdown"})
         self.assertTrue(state["stopped"])
         self.assertEqual(result, {"stopping": True})
+
+
+    def test_collect_sales_detects_repeated_cursor(self):
+        first = SimpleNamespace(id="1", price=1.0)
+        second = SimpleNamespace(id="2", price=2.0)
+
+        class FakeAccount:
+            def get_sales(self, start_from=None, **_kwargs):
+                if start_from is None:
+                    return "2", [first], "ru", {}
+                return "2", [second], "ru", {}
+
+        with self.assertRaisesRegex(RuntimeError, "повторил курсор"):
+            _collect_sales(FakeAccount(), max_pages=10)
+
+    def test_get_orders_detects_repeated_cursor(self):
+        class FakeAccount:
+            def get_sales(self, start_from=None, **_kwargs):
+                return "20", [], "ru", {}
+
+        vertex = SimpleNamespace(account=FakeAccount())
+        with self.assertRaisesRegex(RuntimeError, "повторил курсор"):
+            _handle_command(vertex, {"action": "get_orders", "start_from": "20"})
 
     def test_message_serializes_text_and_author(self):
         message = SimpleNamespace(
